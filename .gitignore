@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Runtime state / logs
+state_*.json
+state.json
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Local tooling
+.claude/
