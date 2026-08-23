@@ -118,6 +118,35 @@ state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
    automatically, safe to delete to force a flat position on that
    instrument).
 
+## Backtesting
+
+`backtest.py` replays the exact same strategy code the live bot uses
+(`strategy.generate_spot_signal`) against historical price data, so results
+reflect the real decision logic rather than a reimplementation that could
+drift from it.
+
+```bash
+python backtest.py --instrument BOTH          # both instruments, defaults
+python backtest.py --instrument BTC --days 60 --sma-period 20
+python backtest.py --instrument NIFTY --target-pct 0.01 --stop-loss-pct 0.005
+```
+
+It prints number of trades, win rate, average win/loss, compounded return,
+max drawdown, and the last 5 trades.
+
+**Important limitation for Nifty**: this backtests the underlying *index*
+price directly, not the option premium the live bot actually trades. There's
+no free historical NSE options-chain data, so the actual option P&L (which
+differs from the index due to theta decay and changing IV) can't be
+backtested. Treat Nifty's backtest as a check on whether the SMA-crossover
+*trigger* is any good, not a return forecast — its default target/stop-loss
+percentages are also index-scaled (1%/0.5%), not the option-premium-scaled
+ones the live bot uses (`PROFIT_TARGET_PCT`/`STOP_LOSS_PCT` in `.env`).
+
+`yfinance` also caps how far back intraday data goes — 15-minute candles are
+only available for the last 60 days; using `--interval` values other than
+`15m` changes that limit (`backtest.py`'s `_MAX_INTRADAY_LOOKBACK_DAYS`).
+
 ## Notes / limitations
 
 - Nifty's Delta/Theta are computed from NSE's quoted implied volatility per
