@@ -53,6 +53,7 @@ def generate_signal(
     profit_target_pct: float = 0.20,
     stop_loss_pct: float = 0.30,
     currency_symbol: str = "₹",
+    trend_sma: float | None = None,
 ) -> dict:
     """Evaluate the strategy rules and return a signal dict.
 
@@ -61,6 +62,9 @@ def generate_signal(
         and an ATM call (Delta ~= 0.50) is available. The signal carries a
         target price (entry + profit_target_pct) and a stop-loss price
         (entry - stop_loss_pct) for the trader to set on the option premium.
+        If `trend_sma` is given, the crossover is only accepted when price is
+        also above it (trend-confirmation filter - rejects crossovers that
+        happen against the broader trend, e.g. in a choppy/sideways market).
       - SELL: currently in a position, and any of: the option hits the
         profit target, the option hits the stop-loss, or price crosses back
         below the SMA.
@@ -71,11 +75,12 @@ def generate_signal(
     """
     crossed_above = prev_price <= prev_sma and current_price > sma
     crossed_below = prev_price >= prev_sma and current_price < sma
+    trend_ok = trend_sma is None or current_price > trend_sma
 
     signal = {"action": "HOLD", "ticker": ticker, "reason": "No trigger condition met"}
 
     if not state.get("in_position"):
-        if crossed_above and atm_call is not None:
+        if crossed_above and atm_call is not None and trend_ok:
             entry_price = atm_call["ltp"]
             target_price = round(entry_price * (1 + profit_target_pct), 2)
             stop_loss_price = round(entry_price * (1 - stop_loss_pct), 2)
@@ -104,6 +109,8 @@ def generate_signal(
                 "stop_loss_price": stop_loss_price,
                 "entry_time": dt.datetime.now().isoformat(),
             }
+        elif crossed_above and not trend_ok:
+            signal["reason"] = "Underlying crossed above SMA but rejected by trend filter"
         elif crossed_above and atm_call is None:
             signal["reason"] = "Underlying crossed above SMA but no ATM call near 0.50 delta was found"
     else:
@@ -156,6 +163,7 @@ def generate_spot_signal(
     profit_target_pct: float,
     stop_loss_pct: float,
     currency_symbol: str = "$",
+    trend_sma: float | None = None,
 ) -> dict:
     """Evaluate the strategy rules for plain spot trading (no options chain).
 
@@ -163,6 +171,9 @@ def generate_spot_signal(
       - BUY: not currently in a position, and price crosses above the SMA.
         The signal carries a target price (entry + profit_target_pct) and a
         stop-loss price (entry - stop_loss_pct) on the traded price itself.
+        If `trend_sma` is given, the crossover is only accepted when price is
+        also above it (trend-confirmation filter - rejects crossovers that
+        happen against the broader trend, e.g. in a choppy/sideways market).
       - SELL: currently in a position, and any of: price hits the target,
         price hits the stop-loss, or price crosses back below the SMA.
       - HOLD: neither condition is met.
@@ -172,11 +183,12 @@ def generate_spot_signal(
     """
     crossed_above = prev_price <= prev_sma and current_price > sma
     crossed_below = prev_price >= prev_sma and current_price < sma
+    trend_ok = trend_sma is None or current_price > trend_sma
 
     signal = {"action": "HOLD", "ticker": ticker, "reason": "No trigger condition met"}
 
     if not state.get("in_position"):
-        if crossed_above:
+        if crossed_above and trend_ok:
             entry_price = current_price
             target_price = round(entry_price * (1 + profit_target_pct), 2)
             stop_loss_price = round(entry_price * (1 - stop_loss_pct), 2)
@@ -197,6 +209,8 @@ def generate_spot_signal(
                 "stop_loss_price": stop_loss_price,
                 "entry_time": dt.datetime.now().isoformat(),
             }
+        elif crossed_above and not trend_ok:
+            signal["reason"] = "Price crossed above SMA but rejected by trend filter"
     else:
         entry_price = state.get("entry_price")
         target_price = state.get("target_price")

@@ -114,7 +114,23 @@ def load_config() -> dict:
         "btc_profit_target_pct": float(_get("BTC_PROFIT_TARGET_PCT", "0.03")),
         "btc_stop_loss_pct": float(_get("BTC_STOP_LOSS_PCT", "0.02")),
         "sma_period": int(_get("SMA_PERIOD", "20")),
+        "trend_sma_period": int(_get("TREND_SMA_PERIOD", "50")),
     }
+
+
+def _trend_sma(closes, period: int, instrument_key: str) -> float | None:
+    """Compute the trend-confirmation SMA, or None if disabled/not enough history yet."""
+    if period <= 0:
+        return None
+    if len(closes) < period:
+        logger.warning(
+            "[%s] Only %d price points available, need %d for trend SMA - filter disabled this cycle",
+            instrument_key,
+            len(closes),
+            period,
+        )
+        return None
+    return analyzer.calculate_sma(closes, period=period)
 
 
 def run_check(config: dict, instrument: dict) -> None:
@@ -138,6 +154,7 @@ def run_check(config: dict, instrument: dict) -> None:
             risk_free_rate=config[instrument["risk_free_rate_key"]],
         )
         atm_call = analyzer.find_atm_call(enriched_chain, spot_price=current_price)
+        trend_sma = _trend_sma(closes, config["trend_sma_period"], instrument["key"])
 
         result = strategy.generate_signal(
             ticker=instrument["key"],
@@ -151,6 +168,7 @@ def run_check(config: dict, instrument: dict) -> None:
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
             currency_symbol=instrument["currency_symbol"],
+            trend_sma=trend_sma,
         )
     else:  # spot
         history = instrument["fetch"](config)
@@ -159,6 +177,7 @@ def run_check(config: dict, instrument: dict) -> None:
         prev_sma = analyzer.calculate_sma(closes.iloc[:-1], period=config["sma_period"])
         current_price = float(closes.iloc[-1])
         prev_price = float(closes.iloc[-2])
+        trend_sma = _trend_sma(closes, config["trend_sma_period"], instrument["key"])
 
         result = strategy.generate_spot_signal(
             ticker=instrument["key"],
@@ -170,6 +189,7 @@ def run_check(config: dict, instrument: dict) -> None:
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
             currency_symbol=instrument["currency_symbol"],
+            trend_sma=trend_sma,
         )
 
     strategy.save_state(result["state"], instrument["state_file"])

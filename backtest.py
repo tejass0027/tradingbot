@@ -82,9 +82,16 @@ def run_backtest(
     profit_target_pct: float,
     stop_loss_pct: float,
     ticker: str = "BACKTEST",
+    trend_sma_period: int | None = None,
 ) -> dict:
-    """Replay the live spot strategy bar-by-bar over `closes` and return trade stats."""
+    """Replay the live spot strategy bar-by-bar over `closes` and return trade stats.
+
+    If `trend_sma_period` is set, it's passed through to
+    strategy.generate_spot_signal's `trend_sma` argument - the same
+    trend-confirmation filter the live bot can apply.
+    """
     sma_series = closes.rolling(window=sma_period).mean()
+    trend_sma_series = closes.rolling(window=trend_sma_period).mean() if trend_sma_period else None
     state = {"in_position": False}
     trades = []
     open_trade = None
@@ -94,6 +101,11 @@ def run_backtest(
         prev_sma = sma_series.iloc[i - 1]
         if pd.isna(sma) or pd.isna(prev_sma):
             continue
+        trend_sma = None
+        if trend_sma_series is not None:
+            if pd.isna(trend_sma_series.iloc[i]):
+                continue
+            trend_sma = float(trend_sma_series.iloc[i])
 
         current_price = float(closes.iloc[i])
         prev_price = float(closes.iloc[i - 1])
@@ -107,6 +119,7 @@ def run_backtest(
             state=state,
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
+            trend_sma=trend_sma,
         )
         state = result["state"]
         signal = result["signal"]
@@ -160,10 +173,11 @@ def _summarize_trades(trades: list) -> dict:
 def print_report(instrument: str, config: dict, stats: dict) -> None:
     cur = INSTRUMENT_DEFAULTS[instrument]["currency_symbol"]
     print(f"\n=== {instrument} backtest ===")
+    trend_str = f"  trend_sma={config['trend_sma_period']}" if config.get("trend_sma_period") else ""
     print(
         f"ticker={config['yfinance_ticker']}  interval={config['interval']}  days={config['days']}  "
         f"sma_period={config['sma_period']}  target={config['profit_target_pct']:.2%}  "
-        f"stop_loss={config['stop_loss_pct']:.2%}"
+        f"stop_loss={config['stop_loss_pct']:.2%}{trend_str}"
     )
 
     if stats["num_trades"] == 0:
@@ -192,6 +206,12 @@ def main() -> None:
     parser.add_argument("--sma-period", type=int, default=20)
     parser.add_argument("--target-pct", type=float, default=None, help="Overrides the instrument default")
     parser.add_argument("--stop-loss-pct", type=float, default=None, help="Overrides the instrument default")
+    parser.add_argument(
+        "--trend-sma-period",
+        type=int,
+        default=None,
+        help="Only take BUY signals when price is also above this longer SMA (trend-confirmation filter)",
+    )
     args = parser.parse_args()
 
     instruments = ["NIFTY", "BTC"] if args.instrument == "BOTH" else [args.instrument]
@@ -205,6 +225,7 @@ def main() -> None:
             "sma_period": args.sma_period,
             "profit_target_pct": args.target_pct if args.target_pct is not None else defaults["profit_target_pct"],
             "stop_loss_pct": args.stop_loss_pct if args.stop_loss_pct is not None else defaults["stop_loss_pct"],
+            "trend_sma_period": args.trend_sma_period,
         }
 
         if instrument == "NIFTY":
@@ -223,6 +244,7 @@ def main() -> None:
                 profit_target_pct=config["profit_target_pct"],
                 stop_loss_pct=config["stop_loss_pct"],
                 ticker=instrument,
+                trend_sma_period=args.trend_sma_period,
             )
             print_report(instrument, config, stats)
         except Exception as exc:  # noqa: BLE001

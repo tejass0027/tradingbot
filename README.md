@@ -81,6 +81,23 @@ Connect, Upstox, etc.) instead of free scraping.
 These percentage defaults are common risk-management conventions, not
 personalized advice — adjust them in `.env` to fit your own risk tolerance.
 
+### Trend-confirmation filter
+
+Both BUY/BUY_CALL rules above have one more condition attached:
+`TREND_SMA_PERIOD` (default 50, in `.env`) — price must also be above this
+longer/slower SMA, not just the 20-SMA, for the signal to fire. This rejects
+crossovers that happen against the broader trend (e.g. brief upward blips
+during a choppy/sideways or downward market). Set `TREND_SMA_PERIOD=0` to
+disable it and go back to a bare 20-SMA crossover.
+
+This was validated with `backtest.py` before being wired in: over the last
+60 days of 15-min candles, adding the filter took BTC from a -1.47%
+compounded return (361 trades, 26.6% win rate) to +2.74% (214 trades, 29.9%
+win rate) with lower drawdown. Nifty's improvement was smaller (-1.29% →
+-1.09%) — remember Nifty's backtest trades the index, not the option
+premium, so treat that number as a trigger-quality signal, not a return
+forecast.
+
 Nifty and Bitcoin each track their own position independently (separate
 state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
 
