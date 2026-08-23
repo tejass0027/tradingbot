@@ -4,8 +4,6 @@ import datetime as dt
 import logging
 
 import pandas as pd
-from py_vollib.black_scholes.greeks.analytical import delta as bs_delta
-from py_vollib.black_scholes.greeks.analytical import theta as bs_theta
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +30,11 @@ def enrich_chain_with_greeks(
     Rows with missing price/IV data (illiquid strikes) get NaN Greeks and are
     left in the frame rather than dropped, so callers can decide how to handle them.
     """
+    # Imported lazily so BTC-only deployments (spot trading, no Greeks needed)
+    # don't need py_vollib installed at all.
+    from py_vollib.black_scholes.greeks.analytical import delta as bs_delta
+    from py_vollib.black_scholes.greeks.analytical import theta as bs_theta
+
     t_years = max(days_to_expiry, 1) / 365.0
     enriched = chain.copy()
     deltas = []

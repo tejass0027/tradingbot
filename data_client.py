@@ -24,7 +24,6 @@ import re
 
 import pandas as pd
 import yfinance as yf
-from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +129,9 @@ def get_option_chain(
 
 
 def _scrape_option_chain(min_days: int, max_days: int, timeout_ms: int) -> dict:
+    # Imported lazily so BTC-only deployments don't need Playwright installed at all.
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
