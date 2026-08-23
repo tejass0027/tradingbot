@@ -1,0 +1,41 @@
+name: BTC Trading Bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore position state
+        uses: actions/cache/restore@v4
+        with:
+          path: state_btc.json
+          key: btc-state-${{ github.run_id }}
+          restore-keys: |
+            btc-state-
+
+      - name: Install dependencies
+        run: pip install -r requirements-btc.txt
+
+      - name: Run one check cycle
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ENABLE_NIFTY: "false"
+          ENABLE_BTC: "true"
+        run: python main.py --once
+
+      - name: Save position state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state_btc.json
+          key: btc-state-${{ github.run_id }}

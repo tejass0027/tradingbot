@@ -6,6 +6,7 @@ CHECK_INTERVAL_SECONDS.
 import datetime as dt
 import logging
 import os
+import sys
 import time
 from zoneinfo import ZoneInfo
 
@@ -88,11 +89,18 @@ INSTRUMENTS = [
 
 
 def load_config() -> dict:
-    """Load configuration from .env, with sane defaults for anything missing."""
+    """Load configuration from real environment variables first, falling back
+    to a local .env file, then to defaults.
+
+    Checking os.environ first (not just the .env file) matters for Docker
+    (`--env-file`) and GitHub Actions (repo secrets) deployments, which
+    inject config as real process environment variables rather than writing
+    an actual .env file into the runtime.
+    """
     env = dotenv_values(".env")
 
     def _get(key: str, default: str) -> str:
-        value = env.get(key)
+        value = os.environ.get(key) or env.get(key)
         return value if value not in (None, "") else default
 
     def _get_bool(key: str, default: bool) -> bool:
@@ -205,7 +213,21 @@ def run_check(config: dict, instrument: dict) -> None:
             logger.warning("[%s] Alert was not sent (see previous log line for details)", instrument["key"])
 
 
+def _run_all_checks(config: dict, active_instruments: list) -> None:
+    for instrument in active_instruments:
+        try:
+            market_open_check = instrument["is_market_open"]
+            if market_open_check is None or market_open_check():
+                run_check(config, instrument)
+            else:
+                logger.info("[%s] Market is closed - skipping check", instrument["key"])
+        except Exception as exc:  # noqa: BLE001 - keep going across any single-instrument failure
+            logger.error("[%s] Check cycle failed: %s", instrument["key"], exc, exc_info=True)
+
+
 def main() -> None:
+    once = "--once" in sys.argv
+
     config = load_config()
     if not config["discord_webhook_url"]:
         logger.warning("DISCORD_WEBHOOK_URL is not set — alerts will be skipped. Copy .env.example to .env and fill it in.")
@@ -215,6 +237,15 @@ def main() -> None:
         logger.error("No instruments enabled (check ENABLE_NIFTY / ENABLE_BTC in .env) — nothing to do.")
         return
 
+    if once:
+        # Single-shot mode: run one round of checks and exit, instead of
+        # looping forever. Used by schedulers that invoke this process
+        # periodically themselves (e.g. a GitHub Actions cron workflow)
+        # rather than keeping a long-running process alive.
+        logger.info("Running a single check for %s (--once)", ", ".join(i["key"] for i in active_instruments))
+        _run_all_checks(config, active_instruments)
+        return
+
     logger.info(
         "Starting options signal agent for %s (checking every %ds)",
         ", ".join(i["key"] for i in active_instruments),
@@ -222,16 +253,7 @@ def main() -> None:
     )
 
     while True:
-        for instrument in active_instruments:
-            try:
-                market_open_check = instrument["is_market_open"]
-                if market_open_check is None or market_open_check():
-                    run_check(config, instrument)
-                else:
-                    logger.info("[%s] Market is closed - skipping check", instrument["key"])
-            except Exception as exc:  # noqa: BLE001 - keep the loop alive across any single-instrument failure
-                logger.error("[%s] Check cycle failed: %s", instrument["key"], exc, exc_info=True)
-
+        _run_all_checks(config, active_instruments)
         time.sleep(config["check_interval_seconds"])
 
 
