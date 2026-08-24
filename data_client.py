@@ -135,7 +135,16 @@ def _scrape_option_chain(min_days: int, max_days: int, timeout_ms: int) -> dict:
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
-            args=["--window-position=-32000,-32000", "--window-size=1280,900"],
+            args=[
+                "--window-position=-32000,-32000",
+                "--window-size=1280,900",
+                # Docker's default /dev/shm is only 64MB, too small for
+                # Chromium's rendering process and a common cause of silent
+                # crashes/hangs on container platforms (Railway, etc.) that
+                # don't let you raise --shm-size. This makes Chromium use
+                # /tmp instead of /dev/shm for shared memory.
+                "--disable-dev-shm-usage",
+            ],
         )
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 900})
