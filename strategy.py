@@ -45,8 +45,6 @@ def generate_signal(
     ticker: str,
     current_price: float,
     sma: float,
-    prev_price: float,
-    prev_sma: float,
     atm_call: dict | None,
     expiry_date: dt.date,
     state: dict,
@@ -70,11 +68,23 @@ def generate_signal(
         below the SMA.
       - HOLD: neither condition is met.
 
+    Crossover detection compares the current above/below-SMA state against
+    `state["was_above_sma"]` (persisted from the previous check), NOT against
+    the previous candle in a freshly fetched price history. This matters
+    because checks don't always run exactly on the candle interval (e.g. a
+    scheduler like GitHub Actions cron can run 15-25+ minutes apart instead
+    of every 5) - comparing only the two most-recently-fetched candles would
+    silently miss a crossover that happened between two checks, since by the
+    next check a newer candle has already taken its place. Persisted-state
+    comparison catches the transition regardless of how much time passed.
+
     Mutates and returns the updated `state` dict alongside the signal so the
     caller can persist it via save_state().
     """
-    crossed_above = prev_price <= prev_sma and current_price > sma
-    crossed_below = prev_price >= prev_sma and current_price < sma
+    is_above_sma = current_price > sma
+    was_above_sma = state.get("was_above_sma")
+    crossed_above = was_above_sma is False and is_above_sma
+    crossed_below = was_above_sma is True and not is_above_sma
     trend_ok = trend_sma is None or current_price > trend_sma
 
     signal = {"action": "HOLD", "ticker": ticker, "reason": "No trigger condition met"}
@@ -150,6 +160,8 @@ def generate_signal(
             }
             state = dict(_FLAT_STATE)
 
+    state = dict(state)
+    state["was_above_sma"] = is_above_sma
     return {"signal": signal, "state": state}
 
 
@@ -157,8 +169,6 @@ def generate_spot_signal(
     ticker: str,
     current_price: float,
     sma: float,
-    prev_price: float,
-    prev_sma: float,
     state: dict,
     profit_target_pct: float,
     stop_loss_pct: float,
@@ -178,11 +188,19 @@ def generate_spot_signal(
         price hits the stop-loss, or price crosses back below the SMA.
       - HOLD: neither condition is met.
 
+    Crossover detection compares the current above/below-SMA state against
+    `state["was_above_sma"]` (persisted from the previous check), NOT against
+    the previous candle in a freshly fetched price history - see
+    generate_signal's docstring for why this matters when checks don't run
+    on a tight, regular schedule (e.g. GitHub Actions cron).
+
     Mutates and returns the updated `state` dict alongside the signal so the
     caller can persist it via save_state().
     """
-    crossed_above = prev_price <= prev_sma and current_price > sma
-    crossed_below = prev_price >= prev_sma and current_price < sma
+    is_above_sma = current_price > sma
+    was_above_sma = state.get("was_above_sma")
+    crossed_above = was_above_sma is False and is_above_sma
+    crossed_below = was_above_sma is True and not is_above_sma
     trend_ok = trend_sma is None or current_price > trend_sma
 
     signal = {"action": "HOLD", "ticker": ticker, "reason": "No trigger condition met"}
@@ -238,4 +256,6 @@ def generate_spot_signal(
             }
             state = dict(_FLAT_STATE)
 
+    state = dict(state)
+    state["was_above_sma"] = is_above_sma
     return {"signal": signal, "state": state}

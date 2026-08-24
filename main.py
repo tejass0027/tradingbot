@@ -151,9 +151,7 @@ def run_check(config: dict, instrument: dict) -> None:
         history, option_data = instrument["fetch"](config)
         closes = history["Close"]
         sma = analyzer.calculate_sma(closes, period=config["sma_period"])
-        prev_sma = analyzer.calculate_sma(closes.iloc[:-1], period=config["sma_period"])
         current_price = float(closes.iloc[-1])
-        prev_price = float(closes.iloc[-2])
 
         enriched_chain = analyzer.enrich_chain_with_greeks(
             option_data["chain"],
@@ -168,8 +166,6 @@ def run_check(config: dict, instrument: dict) -> None:
             ticker=instrument["key"],
             current_price=current_price,
             sma=sma,
-            prev_price=prev_price,
-            prev_sma=prev_sma,
             atm_call=atm_call,
             expiry_date=option_data["expiry_date"],
             state=state,
@@ -182,17 +178,13 @@ def run_check(config: dict, instrument: dict) -> None:
         history = instrument["fetch"](config)
         closes = history["Close"]
         sma = analyzer.calculate_sma(closes, period=config["sma_period"])
-        prev_sma = analyzer.calculate_sma(closes.iloc[:-1], period=config["sma_period"])
         current_price = float(closes.iloc[-1])
-        prev_price = float(closes.iloc[-2])
         trend_sma = _trend_sma(closes, config["trend_sma_period"], instrument["key"])
 
         result = strategy.generate_spot_signal(
             ticker=instrument["key"],
             current_price=current_price,
             sma=sma,
-            prev_price=prev_price,
-            prev_sma=prev_sma,
             state=state,
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,

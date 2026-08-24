@@ -89,6 +89,11 @@ def run_backtest(
     If `trend_sma_period` is set, it's passed through to
     strategy.generate_spot_signal's `trend_sma` argument - the same
     trend-confirmation filter the live bot can apply.
+
+    Crossover detection uses generate_spot_signal's persisted
+    `state["was_above_sma"]` mechanism, same as live - since this loop visits
+    every candle in order, that's equivalent to a plain adjacent-candle
+    comparison here, but it's the same code path the live bot runs.
     """
     sma_series = closes.rolling(window=sma_period).mean()
     trend_sma_series = closes.rolling(window=trend_sma_period).mean() if trend_sma_period else None
@@ -96,10 +101,9 @@ def run_backtest(
     trades = []
     open_trade = None
 
-    for i in range(1, len(closes)):
+    for i in range(sma_period, len(closes)):
         sma = sma_series.iloc[i]
-        prev_sma = sma_series.iloc[i - 1]
-        if pd.isna(sma) or pd.isna(prev_sma):
+        if pd.isna(sma):
             continue
         trend_sma = None
         if trend_sma_series is not None:
@@ -108,14 +112,11 @@ def run_backtest(
             trend_sma = float(trend_sma_series.iloc[i])
 
         current_price = float(closes.iloc[i])
-        prev_price = float(closes.iloc[i - 1])
 
         result = strategy.generate_spot_signal(
             ticker=ticker,
             current_price=current_price,
             sma=float(sma),
-            prev_price=prev_price,
-            prev_sma=float(prev_sma),
             state=state,
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
