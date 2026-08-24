@@ -60,23 +60,33 @@ def format_signal_message(signal: dict) -> str:
     return f"**HOLD** — {signal.get('ticker', '')}: {signal.get('reason', '')}"
 
 
-def send_discord_alert(signal: dict, webhook_url: str, timeout: float = 5.0) -> bool:
-    """Send a formatted signal to a Discord incoming webhook.
+def format_heartbeat_message(status_lines: list[str]) -> str:
+    """Render a periodic 'still running' status message, independent of any
+    actual trade signal - just proof the bot is alive and checking.
+    """
+    body = "\n".join(f"- {line}" for line in status_lines) if status_lines else "- (no instruments checked)"
+    return f"### \U0001F49A Bot heartbeat — still running\n{body}"
+
+
+def send_message(content: str, webhook_url: str, timeout: float = 5.0) -> bool:
+    """Post raw Markdown content to a Discord incoming webhook.
 
     Returns True on success, False on failure (never raises, since a failed
-    alert shouldn't crash the bot's main loop).
+    send shouldn't crash the bot's main loop).
     """
     if not webhook_url:
-        logger.warning("No Discord webhook URL configured; skipping alert")
+        logger.warning("No Discord webhook URL configured; skipping message")
         return False
 
-    message = format_signal_message(signal)
-    payload = {"content": message}
-
     try:
-        response = requests.post(webhook_url, json=payload, timeout=timeout)
+        response = requests.post(webhook_url, json={"content": content}, timeout=timeout)
         response.raise_for_status()
         return True
     except requests.RequestException as exc:
-        logger.error("Failed to send Discord alert: %s", exc)
+        logger.error("Failed to send Discord message: %s", exc)
         return False
+
+
+def send_discord_alert(signal: dict, webhook_url: str, timeout: float = 5.0) -> bool:
+    """Send a formatted trade signal to a Discord incoming webhook."""
+    return send_message(format_signal_message(signal), webhook_url, timeout)

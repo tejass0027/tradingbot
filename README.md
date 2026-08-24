@@ -135,6 +135,13 @@ state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
    automatically, safe to delete to force a flat position on that
    instrument).
 
+   It also posts a "💚 Bot heartbeat — still running" message to Discord
+   every `HEARTBEAT_INTERVAL_SECONDS` (default 3600 = 1 hour), separate from
+   real trade alerts, summarizing each instrument's current signal (usually
+   `HOLD`) - a quick way to confirm the process is actually alive without
+   waiting for a real crossover. Only applies to the long-running local loop,
+   not `--once` mode (used by GitHub Actions).
+
 ## Backtesting
 
 `backtest.py` replays the exact same strategy code the live bot uses

@@ -123,6 +123,7 @@ def load_config() -> dict:
         "btc_stop_loss_pct": float(_get("BTC_STOP_LOSS_PCT", "0.02")),
         "sma_period": int(_get("SMA_PERIOD", "20")),
         "trend_sma_period": int(_get("TREND_SMA_PERIOD", "50")),
+        "heartbeat_interval_seconds": int(_get("HEARTBEAT_INTERVAL_SECONDS", "3600")),
     }
 
 
@@ -141,8 +142,11 @@ def _trend_sma(closes, period: int, instrument_key: str) -> float | None:
     return analyzer.calculate_sma(closes, period=period)
 
 
-def run_check(config: dict, instrument: dict) -> None:
-    """Run a single fetch -> analyze -> strategy -> alert cycle for one instrument."""
+def run_check(config: dict, instrument: dict) -> tuple[str, str]:
+    """Run a single fetch -> analyze -> strategy -> alert cycle for one instrument.
+
+    Returns (action, reason) for the caller to fold into a heartbeat summary.
+    """
     state = strategy.load_state(instrument["state_file"])
     profit_target_pct = config[instrument["profit_target_pct_key"]]
     stop_loss_pct = config[instrument["stop_loss_pct_key"]]
@@ -204,17 +208,27 @@ def run_check(config: dict, instrument: dict) -> None:
         else:
             logger.warning("[%s] Alert was not sent (see previous log line for details)", instrument["key"])
 
+    return signal["action"], signal.get("reason", "")
 
-def _run_all_checks(config: dict, active_instruments: list) -> None:
+
+def _run_all_checks(config: dict, active_instruments: list) -> list[str]:
+    """Run one round of checks and return a status line per instrument, for
+    the heartbeat summary (e.g. "NIFTY: market closed", "BTC: HOLD - ...").
+    """
+    status_lines = []
     for instrument in active_instruments:
         try:
             market_open_check = instrument["is_market_open"]
             if market_open_check is None or market_open_check():
-                run_check(config, instrument)
+                action, reason = run_check(config, instrument)
+                status_lines.append(f"{instrument['key']}: {action} - {reason}")
             else:
                 logger.info("[%s] Market is closed - skipping check", instrument["key"])
+                status_lines.append(f"{instrument['key']}: market closed")
         except Exception as exc:  # noqa: BLE001 - keep going across any single-instrument failure
             logger.error("[%s] Check cycle failed: %s", instrument["key"], exc, exc_info=True)
+            status_lines.append(f"{instrument['key']}: check failed ({exc})")
+    return status_lines
 
 
 def main() -> None:
@@ -244,8 +258,17 @@ def main() -> None:
         config["check_interval_seconds"],
     )
 
+    last_heartbeat = 0.0
     while True:
-        _run_all_checks(config, active_instruments)
+        status_lines = _run_all_checks(config, active_instruments)
+
+        now = time.time()
+        if now - last_heartbeat >= config["heartbeat_interval_seconds"]:
+            sent = alerter.send_message(alerter.format_heartbeat_message(status_lines), config["discord_webhook_url"])
+            if sent:
+                logger.info("Heartbeat sent to Discord")
+            last_heartbeat = now
+
         time.sleep(config["check_interval_seconds"])
 
 
