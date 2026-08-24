@@ -13,20 +13,21 @@ ENV PYTHONUNBUFFERED=1
 # xvfb provides a virtual display so Playwright's headed Chromium (required
 # for the Nifty NSE scrape - see data_client.py's module docstring for why
 # headless mode gets blocked) can run on a server with no real display.
-# xauth is required by the xvfb-run wrapper script itself (separate package
-# from xvfb on Debian) - without it xvfb-run fails with "xauth command not
-# found" before even attempting to start Xvfb.
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb xauth \
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN playwright install --with-deps chromium
 
-COPY main.py analyzer.py data_client.py strategy.py alerter.py ./
+COPY main.py analyzer.py data_client.py strategy.py alerter.py entrypoint.sh ./
+RUN chmod +x entrypoint.sh
 
 # .env and state_*.json are provided at runtime (env vars / volume mounts),
 # not baked into the image - see DEPLOY.md.
-# xvfb-run wraps the command in a virtual X display (auto-picks a free
-# display number via -a) so headed Chromium launches succeed.
-CMD ["xvfb-run", "-a", "python", "main.py"]
+# entrypoint.sh starts Xvfb directly and sets DISPLAY, rather than going
+# through the xvfb-run wrapper script - that wrapper hung with no output at
+# all on Railway (even after fixing its xauth dependency and adding
+# PYTHONUNBUFFERED), so this manages the virtual display explicitly instead,
+# which is both more reliable and far easier to debug when it isn't.
+CMD ["./entrypoint.sh"]

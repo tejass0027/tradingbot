@@ -101,16 +101,25 @@ Discord" line on startup. `Ctrl+C` to stop following the logs (the container
 keeps running).
 
 **If Nifty's check fails with a Playwright/browser error**, it's almost
-certainly the virtual display: confirm the container is actually running
-with `xvfb-run` (check `docker inspect tradingbot` for the command, or just
-re-check the Dockerfile's `CMD` line), and check `docker logs` for anything
-mentioning `Xvfb`, `DISPLAY`, or `xauth`.
+certainly the virtual display: check `docker logs` for anything mentioning
+`Xvfb` or `DISPLAY`, and confirm you see "Starting Xvfb on display :99" /
+"Starting bot" from `entrypoint.sh` right after container startup.
 
-Known issue already hit and fixed once (via Railway, same Dockerfile): if
-logs show `xvfb-run: error: xauth command not found`, the `xauth` package
-was missing - it's required by the `xvfb-run` wrapper script itself,
-separately from `xvfb`. The Dockerfile now installs both, but if you're
-looking at an older image/cached layer, rebuild from scratch.
+Known issues already hit and fixed once (via Railway, same Dockerfile) while
+building this out - kept here in case they resurface on a different
+platform:
+- `xvfb-run: error: xauth command not found` - the original approach used
+  the `xvfb-run` wrapper script, which needs a separate `xauth` package.
+- Total silence after "Starting Container" with no error at all, even with
+  `PYTHONUNBUFFERED=1` - `xvfb-run`'s own readiness-check loop appears to
+  hang indefinitely on Railway, for reasons that weren't fully diagnosable
+  remotely. Fixed by dropping `xvfb-run` entirely in favor of
+  `entrypoint.sh`, which starts `Xvfb` directly and sets `DISPLAY` itself -
+  more transparent and far easier to debug when it isn't working.
+- Chromium crashing/hanging unpredictably - Docker's default 64MB
+  `/dev/shm` is too small for Chromium and can't be raised on a platform
+  like Railway; `data_client.py` launches Chromium with
+  `--disable-dev-shm-usage` to work around it.
 
 ## Updating after a code change
 
