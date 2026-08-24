@@ -65,7 +65,7 @@ def format_heartbeat_message(status_lines: list[str]) -> str:
     actual trade signal - just proof the bot is alive and checking.
     """
     body = "\n".join(f"- {line}" for line in status_lines) if status_lines else "- (no instruments checked)"
-    return f"### \U0001F4E1 Status Check — Bot is Online\n{body}"
+    return f"### \U0001F4E1 Status Check\n{body}"
 
 
 def send_message(content: str, webhook_url: str, timeout: float = 5.0) -> bool:

@@ -135,12 +135,23 @@ state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
    automatically, safe to delete to force a flat position on that
    instrument).
 
-   It also posts a "📡 Status Check — Bot is Online" message to Discord
-   every `HEARTBEAT_INTERVAL_SECONDS` (default 3600 = 1 hour), separate from
-   real trade alerts, summarizing each instrument's current signal (usually
+   It also posts a "📡 Status Check" message to Discord every
+   `HEARTBEAT_INTERVAL_SECONDS` (default 3600 = 1 hour), separate from real
+   trade alerts, summarizing each instrument's current signal (usually
    `HOLD`) - a quick way to confirm the process is actually alive without
-   waiting for a real crossover. Only applies to the long-running local loop,
-   not `--once` mode (used by GitHub Actions).
+   waiting for a real crossover.
+
+   Separately, it posts a one-time "🟢 Bot is Online" message right after
+   starting, and a "🔴 Bot is Offline" message on a graceful shutdown (Ctrl+C,
+   or a normal `kill`/`taskkill` without `-9`/`/F`). **A forced kill (task
+   manager "End task", `taskkill /F`, power loss) can't be intercepted by any
+   program, so no offline message is possible in that case** - this is an OS
+   limitation, not a bug.
+
+   Both the status-check heartbeat and the online/offline messages only apply
+   to the long-running local loop, not `--once` mode (used by GitHub
+   Actions) - a fresh process every 5 minutes would otherwise spam an
+   online+offline pair every single run.
 
 ## Backtesting
 

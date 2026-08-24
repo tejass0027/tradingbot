@@ -6,6 +6,7 @@ CHECK_INTERVAL_SECONDS.
 import datetime as dt
 import logging
 import os
+import signal
 import sys
 import time
 from zoneinfo import ZoneInfo
@@ -258,18 +259,38 @@ def main() -> None:
         config["check_interval_seconds"],
     )
 
+    # Route SIGTERM (a normal "stop this process" request, e.g. `kill` without
+    # -9, or a service manager stopping the process) through the same clean
+    # shutdown path as Ctrl+C, so the offline message gets a chance to send.
+    # A forced kill (task manager "End task", `taskkill /F`, power loss)
+    # cannot be intercepted by any program - no message can be sent then.
+    def _handle_sigterm(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
+    instrument_names = ", ".join(i["key"] for i in active_instruments)
+    if alerter.send_message(f"### \U0001F7E2 Bot is Online\nMonitoring: {instrument_names}", config["discord_webhook_url"]):
+        logger.info("Online message sent to Discord")
+
     last_heartbeat = 0.0
-    while True:
-        status_lines = _run_all_checks(config, active_instruments)
+    try:
+        while True:
+            status_lines = _run_all_checks(config, active_instruments)
 
-        now = time.time()
-        if now - last_heartbeat >= config["heartbeat_interval_seconds"]:
-            sent = alerter.send_message(alerter.format_heartbeat_message(status_lines), config["discord_webhook_url"])
-            if sent:
-                logger.info("Heartbeat sent to Discord")
-            last_heartbeat = now
+            now = time.time()
+            if now - last_heartbeat >= config["heartbeat_interval_seconds"]:
+                sent = alerter.send_message(alerter.format_heartbeat_message(status_lines), config["discord_webhook_url"])
+                if sent:
+                    logger.info("Heartbeat sent to Discord")
+                last_heartbeat = now
 
-        time.sleep(config["check_interval_seconds"])
+            time.sleep(config["check_interval_seconds"])
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested")
+    finally:
+        if alerter.send_message("### \U0001F534 Bot is Offline", config["discord_webhook_url"]):
+            logger.info("Offline message sent to Discord")
 
 
 if __name__ == "__main__":
