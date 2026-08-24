@@ -2,6 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# See the main Dockerfile for why this matters (unbuffered stdout so logs
+# actually reach the platform's log viewer, especially if the process dies).
+ENV PYTHONUNBUFFERED=1
+
 COPY requirements-btc.txt .
 RUN pip install --no-cache-dir -r requirements-btc.txt
 

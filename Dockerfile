@@ -2,6 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Python buffers stdout when it isn't attached to a real terminal (true
+# inside Docker/xvfb-run), which can silently swallow log output - and any
+# output still sitting in that buffer - if the process gets killed abruptly
+# (crash, OOM). Unbuffered output means logs actually reach `docker logs` /
+# the platform's log viewer in real time, which matters a lot for debugging
+# a container that dies without an obvious error.
+ENV PYTHONUNBUFFERED=1
+
 # xvfb provides a virtual display so Playwright's headed Chromium (required
 # for the Nifty NSE scrape - see data_client.py's module docstring for why
 # headless mode gets blocked) can run on a server with no real display.
