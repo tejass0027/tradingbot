@@ -104,10 +104,13 @@ keeps running).
 certainly the virtual display: confirm the container is actually running
 with `xvfb-run` (check `docker inspect tradingbot` for the command, or just
 re-check the Dockerfile's `CMD` line), and check `docker logs` for anything
-mentioning `Xvfb` or `DISPLAY`. This is the one part of this deployment I
-couldn't test-build myself (no Docker available in the environment I built
-this in) — the Dockerfile follows the standard Playwright+Xvfb pattern, but
-verify the first build/run carefully.
+mentioning `Xvfb`, `DISPLAY`, or `xauth`.
+
+Known issue already hit and fixed once (via Railway, same Dockerfile): if
+logs show `xvfb-run: error: xauth command not found`, the `xauth` package
+was missing - it's required by the `xvfb-run` wrapper script itself,
+separately from `xvfb`. The Dockerfile now installs both, but if you're
+looking at an older image/cached layer, rebuild from scratch.
 
 ## Updating after a code change
 

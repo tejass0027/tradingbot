@@ -5,7 +5,10 @@ WORKDIR /app
 # xvfb provides a virtual display so Playwright's headed Chromium (required
 # for the Nifty NSE scrape - see data_client.py's module docstring for why
 # headless mode gets blocked) can run on a server with no real display.
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
+# xauth is required by the xvfb-run wrapper script itself (separate package
+# from xvfb on Debian) - without it xvfb-run fails with "xauth command not
+# found" before even attempting to start Xvfb.
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
