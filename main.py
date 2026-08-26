@@ -85,6 +85,7 @@ INSTRUMENTS = [
         "is_market_open": None,  # crypto trades 24/7
         "profit_target_pct_key": "btc_profit_target_pct",
         "stop_loss_pct_key": "btc_stop_loss_pct",
+        "profit_target_dollars_key": "btc_profit_target_dollars",
     },
 ]
 
@@ -107,6 +108,10 @@ def load_config() -> dict:
     def _get_bool(key: str, default: bool) -> bool:
         return _get(key, str(default)).strip().lower() in ("1", "true", "yes", "on")
 
+    def _get_optional_float(key: str) -> float | None:
+        value = os.environ.get(key) or env.get(key)
+        return float(value) if value not in (None, "") else None
+
     return {
         "discord_webhook_url": _get("DISCORD_WEBHOOK_URL", ""),
         "nse_symbol": _get("NSE_SYMBOL", "NIFTY"),
@@ -122,6 +127,7 @@ def load_config() -> dict:
         "stop_loss_pct": float(_get("STOP_LOSS_PCT", "0.30")),
         "btc_profit_target_pct": float(_get("BTC_PROFIT_TARGET_PCT", "0.03")),
         "btc_stop_loss_pct": float(_get("BTC_STOP_LOSS_PCT", "0.02")),
+        "btc_profit_target_dollars": _get_optional_float("BTC_PROFIT_TARGET_DOLLARS"),
         "sma_period": int(_get("SMA_PERIOD", "20")),
         "trend_sma_period": int(_get("TREND_SMA_PERIOD", "50")),
         "heartbeat_interval_seconds": int(_get("HEARTBEAT_INTERVAL_SECONDS", "3600")),
@@ -185,6 +191,7 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
         sma = analyzer.calculate_sma(closes, period=config["sma_period"])
         current_price = float(closes.iloc[-1])
         trend_sma = _trend_sma(closes, config["trend_sma_period"], instrument["key"])
+        profit_target_dollars = config.get(instrument.get("profit_target_dollars_key", ""))
 
         result = strategy.generate_spot_signal(
             ticker=instrument["key"],
@@ -195,6 +202,7 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
             stop_loss_pct=stop_loss_pct,
             currency_symbol=instrument["currency_symbol"],
             trend_sma=trend_sma,
+            profit_target_dollars=profit_target_dollars,
         )
 
     strategy.save_state(result["state"], instrument["state_file"])

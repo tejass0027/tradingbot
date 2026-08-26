@@ -174,13 +174,17 @@ def generate_spot_signal(
     stop_loss_pct: float,
     currency_symbol: str = "$",
     trend_sma: float | None = None,
+    profit_target_dollars: float | None = None,
 ) -> dict:
     """Evaluate the strategy rules for plain spot trading (no options chain).
 
     Rules:
       - BUY: not currently in a position, and price crosses above the SMA.
-        The signal carries a target price (entry + profit_target_pct) and a
-        stop-loss price (entry - stop_loss_pct) on the traded price itself.
+        The signal carries a target price and a stop-loss price on the
+        traded price itself. The stop-loss is always entry * (1 -
+        stop_loss_pct). The target is entry + profit_target_dollars when
+        `profit_target_dollars` is given (a flat dollar profit regardless of
+        entry price), otherwise entry * (1 + profit_target_pct).
         If `trend_sma` is given, the crossover is only accepted when price is
         also above it (trend-confirmation filter - rejects crossovers that
         happen against the broader trend, e.g. in a choppy/sideways market).
@@ -208,7 +212,10 @@ def generate_spot_signal(
     if not state.get("in_position"):
         if crossed_above and trend_ok:
             entry_price = current_price
-            target_price = round(entry_price * (1 + profit_target_pct), 2)
+            if profit_target_dollars is not None:
+                target_price = round(entry_price + profit_target_dollars, 2)
+            else:
+                target_price = round(entry_price * (1 + profit_target_pct), 2)
             stop_loss_price = round(entry_price * (1 - stop_loss_pct), 2)
             signal = {
                 "action": "BUY",

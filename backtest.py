@@ -83,6 +83,7 @@ def run_backtest(
     stop_loss_pct: float,
     ticker: str = "BACKTEST",
     trend_sma_period: int | None = None,
+    profit_target_dollars: float | None = None,
 ) -> dict:
     """Replay the live spot strategy bar-by-bar over `closes` and return trade stats.
 
@@ -121,6 +122,7 @@ def run_backtest(
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
             trend_sma=trend_sma,
+            profit_target_dollars=profit_target_dollars,
         )
         state = result["state"]
         signal = result["signal"]
@@ -213,6 +215,12 @@ def main() -> None:
         default=None,
         help="Only take BUY signals when price is also above this longer SMA (trend-confirmation filter)",
     )
+    parser.add_argument(
+        "--target-dollars",
+        type=float,
+        default=None,
+        help="Flat dollar profit target instead of --target-pct (spot instruments only, e.g. BTC)",
+    )
     args = parser.parse_args()
 
     instruments = ["NIFTY", "BTC"] if args.instrument == "BOTH" else [args.instrument]
@@ -246,6 +254,7 @@ def main() -> None:
                 stop_loss_pct=config["stop_loss_pct"],
                 ticker=instrument,
                 trend_sma_period=args.trend_sma_period,
+                profit_target_dollars=args.target_dollars,
             )
             print_report(instrument, config, stats)
         except Exception as exc:  # noqa: BLE001

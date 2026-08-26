@@ -69,10 +69,14 @@ Connect, Upstox, etc.) instead of free scraping.
 **Bitcoin (spot)**
 - **BUY**: not currently in a position, and BTC's price crosses **above**
   the 20-SMA. The alert includes a target and stop-loss on the *spot price
-  itself*, from `BTC_PROFIT_TARGET_PCT` (default 3% gain) /
-  `BTC_STOP_LOSS_PCT` (default 2% loss) — kept much tighter than Nifty's,
-  since these track the underlying price directly rather than a leveraged
-  option premium.
+  itself*. Stop-loss is always `BTC_STOP_LOSS_PCT` (default 2% loss) — kept
+  much tighter than Nifty's, since it tracks the underlying price directly
+  rather than a leveraged option premium. The target is a flat dollar amount
+  via `BTC_PROFIT_TARGET_DOLLARS` (default `100` — exit once the position is
+  up exactly $100, regardless of entry price) when set; otherwise it falls
+  back to `BTC_PROFIT_TARGET_PCT` (default 3% gain). Set
+  `BTC_PROFIT_TARGET_DOLLARS` empty/unset in `.env` to use the percentage
+  target instead.
 - **SELL**: currently in a position, and any of: price hits the target,
   hits the stop-loss, or crosses **below** the 20-SMA.
 
