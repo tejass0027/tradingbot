@@ -76,6 +76,38 @@ def fetch_historical(ticker: str, interval: str, days: int) -> pd.DataFrame:
     return history
 
 
+def _rsi_series(closes: pd.Series, period: int = 14) -> pd.Series:
+    """Vectorized RSI matching analyzer.calculate_rsi's formula, one value per bar."""
+    delta = closes.diff()
+    gains = delta.clip(lower=0)
+    losses = -delta.clip(upper=0)
+    avg_gain = gains.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = losses.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.where(avg_loss != 0, 100.0)
+
+
+def _macd_histogram_series(closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+    """Vectorized MACD histogram (macd line - signal line), one value per bar."""
+    ema_fast = closes.ewm(span=fast, adjust=False).mean()
+    ema_slow = closes.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line - signal_line
+
+
+_FIB_FRACTIONS = {"0.236": 0.236, "0.382": 0.382, "0.5": 0.5, "0.618": 0.618, "0.786": 0.786}
+
+
+def _fib_support_series(closes: pd.Series, lookback: int = 50, level: str = "0.5") -> pd.Series:
+    """Rolling Fibonacci retracement support level, one value per bar."""
+    rolling_high = closes.rolling(window=lookback).max()
+    rolling_low = closes.rolling(window=lookback).min()
+    span = rolling_high - rolling_low
+    return rolling_high - span * _FIB_FRACTIONS[level]
+
+
 def run_backtest(
     closes: pd.Series,
     sma_period: int,
@@ -84,12 +116,17 @@ def run_backtest(
     ticker: str = "BACKTEST",
     trend_sma_period: int | None = None,
     profit_target_dollars: float | None = None,
+    rsi_period: int | None = None,
+    rsi_overbought: float = 70.0,
+    use_macd: bool = False,
+    fib_lookback: int | None = None,
+    fib_level: str = "0.5",
 ) -> dict:
     """Replay the live spot strategy bar-by-bar over `closes` and return trade stats.
 
-    If `trend_sma_period` is set, it's passed through to
-    strategy.generate_spot_signal's `trend_sma` argument - the same
-    trend-confirmation filter the live bot can apply.
+    `trend_sma_period`, `rsi_period`, `use_macd`, and `fib_lookback` each
+    independently enable the matching optional filter in
+    strategy.generate_spot_signal - the same filters the live bot can apply.
 
     Crossover detection uses generate_spot_signal's persisted
     `state["was_above_sma"]` mechanism, same as live - since this loop visits
@@ -98,6 +135,10 @@ def run_backtest(
     """
     sma_series = closes.rolling(window=sma_period).mean()
     trend_sma_series = closes.rolling(window=trend_sma_period).mean() if trend_sma_period else None
+    rsi_series = _rsi_series(closes, rsi_period) if rsi_period else None
+    macd_series = _macd_histogram_series(closes) if use_macd else None
+    fib_series = _fib_support_series(closes, fib_lookback, fib_level) if fib_lookback else None
+
     state = {"in_position": False}
     trades = []
     open_trade = None
@@ -106,11 +147,30 @@ def run_backtest(
         sma = sma_series.iloc[i]
         if pd.isna(sma):
             continue
+
         trend_sma = None
         if trend_sma_series is not None:
             if pd.isna(trend_sma_series.iloc[i]):
                 continue
             trend_sma = float(trend_sma_series.iloc[i])
+
+        rsi = None
+        if rsi_series is not None:
+            if pd.isna(rsi_series.iloc[i]):
+                continue
+            rsi = float(rsi_series.iloc[i])
+
+        macd_histogram = None
+        if macd_series is not None:
+            if pd.isna(macd_series.iloc[i]):
+                continue
+            macd_histogram = float(macd_series.iloc[i])
+
+        fib_support_level = None
+        if fib_series is not None:
+            if pd.isna(fib_series.iloc[i]):
+                continue
+            fib_support_level = float(fib_series.iloc[i])
 
         current_price = float(closes.iloc[i])
 
@@ -123,6 +183,10 @@ def run_backtest(
             stop_loss_pct=stop_loss_pct,
             trend_sma=trend_sma,
             profit_target_dollars=profit_target_dollars,
+            rsi=rsi,
+            rsi_overbought=rsi_overbought,
+            macd_histogram=macd_histogram,
+            fib_support_level=fib_support_level,
         )
         state = result["state"]
         signal = result["signal"]
@@ -176,11 +240,20 @@ def _summarize_trades(trades: list) -> dict:
 def print_report(instrument: str, config: dict, stats: dict) -> None:
     cur = INSTRUMENT_DEFAULTS[instrument]["currency_symbol"]
     print(f"\n=== {instrument} backtest ===")
-    trend_str = f"  trend_sma={config['trend_sma_period']}" if config.get("trend_sma_period") else ""
+    filters = []
+    if config.get("trend_sma_period"):
+        filters.append(f"trend_sma={config['trend_sma_period']}")
+    if config.get("rsi_period"):
+        filters.append(f"rsi={config['rsi_period']}(<{config['rsi_overbought']})")
+    if config.get("use_macd"):
+        filters.append("macd")
+    if config.get("fib_lookback"):
+        filters.append(f"fib={config['fib_lookback']}@{config['fib_level']}")
+    filters_str = "  " + "  ".join(filters) if filters else ""
     print(
         f"ticker={config['yfinance_ticker']}  interval={config['interval']}  days={config['days']}  "
         f"sma_period={config['sma_period']}  target={config['profit_target_pct']:.2%}  "
-        f"stop_loss={config['stop_loss_pct']:.2%}{trend_str}"
+        f"stop_loss={config['stop_loss_pct']:.2%}{filters_str}"
     )
 
     if stats["num_trades"] == 0:
@@ -221,6 +294,30 @@ def main() -> None:
         default=None,
         help="Flat dollar profit target instead of --target-pct (spot instruments only, e.g. BTC)",
     )
+    parser.add_argument(
+        "--rsi-period",
+        type=int,
+        default=None,
+        help="Reject BUY signals when RSI is at/above --rsi-overbought (momentum filter)",
+    )
+    parser.add_argument("--rsi-overbought", type=float, default=70.0)
+    parser.add_argument(
+        "--macd",
+        action="store_true",
+        help="Reject BUY signals unless the MACD histogram is positive (bullish momentum)",
+    )
+    parser.add_argument(
+        "--fib-lookback",
+        type=int,
+        default=None,
+        help="Reject BUY signals when price is below the Fibonacci support level over this many candles",
+    )
+    parser.add_argument(
+        "--fib-level",
+        choices=list(_FIB_FRACTIONS.keys()),
+        default="0.5",
+        help="Which Fibonacci retracement level counts as support (default 0.5)",
+    )
     args = parser.parse_args()
 
     instruments = ["NIFTY", "BTC"] if args.instrument == "BOTH" else [args.instrument]
@@ -235,6 +332,11 @@ def main() -> None:
             "profit_target_pct": args.target_pct if args.target_pct is not None else defaults["profit_target_pct"],
             "stop_loss_pct": args.stop_loss_pct if args.stop_loss_pct is not None else defaults["stop_loss_pct"],
             "trend_sma_period": args.trend_sma_period,
+            "rsi_period": args.rsi_period,
+            "rsi_overbought": args.rsi_overbought,
+            "use_macd": args.macd,
+            "fib_lookback": args.fib_lookback,
+            "fib_level": args.fib_level,
         }
 
         if instrument == "NIFTY":
@@ -255,6 +357,11 @@ def main() -> None:
                 ticker=instrument,
                 trend_sma_period=args.trend_sma_period,
                 profit_target_dollars=args.target_dollars,
+                rsi_period=args.rsi_period,
+                rsi_overbought=args.rsi_overbought,
+                use_macd=args.macd,
+                fib_lookback=args.fib_lookback,
+                fib_level=args.fib_level,
             )
             print_report(instrument, config, stats)
         except Exception as exc:  # noqa: BLE001

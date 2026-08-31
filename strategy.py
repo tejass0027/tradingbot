@@ -175,6 +175,10 @@ def generate_spot_signal(
     currency_symbol: str = "$",
     trend_sma: float | None = None,
     profit_target_dollars: float | None = None,
+    rsi: float | None = None,
+    rsi_overbought: float = 70.0,
+    macd_histogram: float | None = None,
+    fib_support_level: float | None = None,
 ) -> dict:
     """Evaluate the strategy rules for plain spot trading (no options chain).
 
@@ -185,9 +189,19 @@ def generate_spot_signal(
         stop_loss_pct). The target is entry + profit_target_dollars when
         `profit_target_dollars` is given (a flat dollar profit regardless of
         entry price), otherwise entry * (1 + profit_target_pct).
-        If `trend_sma` is given, the crossover is only accepted when price is
-        also above it (trend-confirmation filter - rejects crossovers that
-        happen against the broader trend, e.g. in a choppy/sideways market).
+
+        The crossover is only accepted if every filter that's actually
+        supplied agrees (each defaults to None/disabled independently):
+          - `trend_sma`: price must also be above this longer/slower SMA
+            (rejects crossovers against the broader trend).
+          - `rsi` + `rsi_overbought`: rejects the entry if RSI is already at
+            or above the overbought threshold (momentum may be exhausted).
+          - `macd_histogram`: rejects the entry unless positive (MACD line
+            above its signal line - bullish momentum agrees with the
+            crossover).
+          - `fib_support_level`: rejects the entry unless price is at or
+            above this Fibonacci retracement level (a common proxy for "the
+            recent uptrend structure is still intact").
       - SELL: currently in a position, and any of: price hits the target,
         price hits the stop-loss, or price crosses back below the SMA.
       - HOLD: neither condition is met.
@@ -205,12 +219,17 @@ def generate_spot_signal(
     was_above_sma = state.get("was_above_sma")
     crossed_above = was_above_sma is False and is_above_sma
     crossed_below = was_above_sma is True and not is_above_sma
+
     trend_ok = trend_sma is None or current_price > trend_sma
+    rsi_ok = rsi is None or rsi < rsi_overbought
+    macd_ok = macd_histogram is None or macd_histogram > 0
+    fib_ok = fib_support_level is None or current_price >= fib_support_level
+    filters_ok = trend_ok and rsi_ok and macd_ok and fib_ok
 
     signal = {"action": "HOLD", "ticker": ticker, "reason": "No trigger condition met"}
 
     if not state.get("in_position"):
-        if crossed_above and trend_ok:
+        if crossed_above and filters_ok:
             entry_price = current_price
             if profit_target_dollars is not None:
                 target_price = round(entry_price + profit_target_dollars, 2)
@@ -234,8 +253,17 @@ def generate_spot_signal(
                 "stop_loss_price": stop_loss_price,
                 "entry_time": dt.datetime.now().isoformat(),
             }
-        elif crossed_above and not trend_ok:
-            signal["reason"] = "Price crossed above SMA but rejected by trend filter"
+        elif crossed_above and not filters_ok:
+            failed = []
+            if not trend_ok:
+                failed.append("trend")
+            if not rsi_ok:
+                failed.append("RSI overbought")
+            if not macd_ok:
+                failed.append("MACD bearish")
+            if not fib_ok:
+                failed.append("below Fib support")
+            signal["reason"] = f"Price crossed above SMA but rejected by filter(s): {', '.join(failed)}"
     else:
         entry_price = state.get("entry_price")
         target_price = state.get("target_price")

@@ -18,6 +18,87 @@ def calculate_sma(prices: pd.Series, period: int = 20) -> float:
     return float(prices.tail(period).mean())
 
 
+def calculate_rsi(prices: pd.Series, period: int = 14) -> float:
+    """Calculate the Relative Strength Index (RSI) using Wilder's smoothing.
+
+    RSI ranges 0-100: conventionally >70 is "overbought" (momentum may be
+    exhausted), <30 is "oversold". Raises ValueError if there isn't enough data.
+    """
+    if len(prices) < period + 1:
+        raise ValueError(f"Need at least {period + 1} price points for RSI, got {len(prices)}")
+
+    delta = prices.diff()
+    gains = delta.clip(lower=0)
+    losses = -delta.clip(upper=0)
+    avg_gain = gains.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    avg_loss = losses.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    last_avg_gain = float(avg_gain.iloc[-1])
+    last_avg_loss = float(avg_loss.iloc[-1])
+    if last_avg_loss == 0:
+        return 100.0 if last_avg_gain > 0 else 50.0
+
+    rs = last_avg_gain / last_avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def calculate_macd(
+    prices: pd.Series,
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+) -> dict:
+    """Calculate MACD: the difference between a fast and slow EMA, plus a
+    signal line (EMA of that difference) and the histogram (their gap).
+
+    Returns {"macd_line": float, "signal_line": float, "histogram": float}.
+    A positive histogram (MACD line above signal line) is read as bullish
+    momentum; negative is bearish. Raises ValueError if there isn't enough data.
+    """
+    if len(prices) < slow_period + signal_period:
+        raise ValueError(
+            f"Need at least {slow_period + signal_period} price points for MACD, got {len(prices)}"
+        )
+
+    ema_fast = prices.ewm(span=fast_period, adjust=False).mean()
+    ema_slow = prices.ewm(span=slow_period, adjust=False).mean()
+    macd_series = ema_fast - ema_slow
+    signal_series = macd_series.ewm(span=signal_period, adjust=False).mean()
+
+    macd_line = float(macd_series.iloc[-1])
+    signal_line = float(signal_series.iloc[-1])
+    return {"macd_line": macd_line, "signal_line": signal_line, "histogram": macd_line - signal_line}
+
+
+def calculate_fibonacci_levels(prices: pd.Series, lookback: int = 50) -> dict:
+    """Calculate Fibonacci retracement levels from the swing high/low over
+    the last `lookback` candles.
+
+    Returns the swing high/low plus the standard retracement levels (price
+    points between them at 23.6%, 38.2%, 50%, 61.8%, 78.6% retraced from the
+    high). These are commonly read as potential support levels in an
+    uptrend - price holding above a level is taken as the trend still intact.
+    Raises ValueError if there isn't enough data.
+    """
+    if len(prices) < lookback:
+        raise ValueError(f"Need at least {lookback} price points for Fibonacci levels, got {len(prices)}")
+
+    window = prices.tail(lookback)
+    swing_high = float(window.max())
+    swing_low = float(window.min())
+    span = swing_high - swing_low
+
+    return {
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "0.236": swing_high - span * 0.236,
+        "0.382": swing_high - span * 0.382,
+        "0.5": swing_high - span * 0.5,
+        "0.618": swing_high - span * 0.618,
+        "0.786": swing_high - span * 0.786,
+    }
+
+
 def enrich_chain_with_greeks(
     chain: pd.DataFrame,
     spot_price: float,
