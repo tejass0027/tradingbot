@@ -59,6 +59,14 @@ INSTRUMENT_DEFAULTS = {
         "profit_target_pct": 0.03,
         "stop_loss_pct": 0.02,
     },
+    "USDINR": {
+        "yfinance_ticker": "USDINR=X",
+        "currency_symbol": "₹",
+        # Forex moves are far smaller than crypto's - these are ~10x tighter
+        # than BTC's, sized off USD/INR's actual 15m volatility.
+        "profit_target_pct": 0.004,
+        "stop_loss_pct": 0.002,
+    },
 }
 
 
@@ -276,7 +284,7 @@ def print_report(instrument: str, config: dict, stats: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backtest the SMA-crossover strategy")
-    parser.add_argument("--instrument", choices=["NIFTY", "BTC", "BOTH"], default="BOTH")
+    parser.add_argument("--instrument", choices=["NIFTY", "BTC", "USDINR", "BOTH"], default="BOTH")
     parser.add_argument("--interval", default="15m")
     parser.add_argument("--days", type=int, default=60)
     parser.add_argument("--sma-period", type=int, default=20)

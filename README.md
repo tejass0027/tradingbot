@@ -1,13 +1,15 @@
-# Trading Signal Agent (Nifty 50 Options + Bitcoin Spot)
+# Trading Signal Agent (Nifty 50 Options + Bitcoin & USD/INR Spot)
 
-A modular Python bot that watches Nifty 50 and Bitcoin and pushes Buy/Sell
-alerts to a Discord channel via webhook, using a 20-period SMA crossover
-strategy for each:
+A modular Python bot that watches Nifty 50, Bitcoin, and the USD/INR forex
+pair and pushes Buy/Sell alerts to a Discord channel via webhook, using a
+20-period SMA crossover strategy for each:
 
 - **Nifty 50**: options-based — finds an at-the-money (ATM) call near 0.50
   Delta and alerts on that option's premium.
 - **Bitcoin**: plain spot trading — alerts on BTC's price directly, no
   options chain involved.
+- **USD/INR**: plain spot trading on the forex rate itself, same as Bitcoin
+  — no options chain involved.
 
 **This is an educational/signal-generation tool. It does not place trades.
 It is not financial advice.**
@@ -18,11 +20,14 @@ It is not financial advice.**
 |---|---|---|
 | Nifty 50 | `yfinance` (`^NSEI`) | Scraped from NSE's option-chain page via a real browser (see below) |
 | Bitcoin | `yfinance` (`BTC-USD`) | None — traded as spot |
+| USD/INR | `yfinance` (`USDINR=X`) | None — traded as spot |
 
 `yfinance` doesn't carry Indian options chain data, so Nifty's chain comes
-from NSE directly. Bitcoin only needs price history since it trades as spot.
-Gold was considered but skipped: there's no free, reliable options-chain
-source for it (MCX isn't freely accessible, similar to or worse than NSE).
+from NSE directly. Bitcoin and USD/INR only need price history since they
+trade as spot. Gold was considered but skipped: there's no free, reliable
+options-chain source for it (MCX isn't freely accessible, similar to or
+worse than NSE) — it could be added as spot/futures-only the same way BTC
+and USD/INR were, if wanted later.
 
 ### Why Nifty's options chain needs a real browser
 
@@ -52,7 +57,7 @@ Connect, Upstox, etc.) instead of free scraping.
 | `main.py` | Loads config, defines the per-instrument pipeline (options vs spot mode), runs the check loop every `CHECK_INTERVAL_SECONDS` |
 | `data_client.py` | Fetches price history (yfinance) and Nifty's options chain (NSE browser-scrape) |
 | `analyzer.py` | Computes SMA and Black-Scholes Greeks (Delta/Theta) per strike (Nifty only) |
-| `strategy.py` | `generate_signal` (options: BUY_CALL/SELL/HOLD) and `generate_spot_signal` (BTC: BUY/SELL/HOLD), each with position state persisted to `state_<instrument>.json` |
+| `strategy.py` | `generate_signal` (options: BUY_CALL/SELL/HOLD) and `generate_spot_signal` (BTC/USD-INR: BUY/SELL/HOLD), each with position state persisted to `state_<instrument>.json` |
 | `alerter.py` | Formats signals as Markdown and posts them to a Discord webhook |
 
 ### Strategy rules (applied independently per instrument)
@@ -80,61 +85,89 @@ Connect, Upstox, etc.) instead of free scraping.
 - **SELL**: currently in a position, and any of: price hits the target,
   hits the stop-loss, or crosses **below** the 20-SMA.
 
-**HOLD** (both): neither condition is met.
+**USD/INR (spot)**
+- Same rules as Bitcoin, but sized for forex's much smaller moves:
+  `USDINR_PROFIT_TARGET_PCT` (default 0.4% gain) / `USDINR_STOP_LOSS_PCT`
+  (default 0.2% loss), no flat-amount option.
+- Checks are skipped outside forex trading days (approximated as "closed
+  Saturday and Sunday" — see Notes/limitations).
+
+**HOLD** (all three): neither condition is met.
 
 These percentage defaults are common risk-management conventions, not
 personalized advice — adjust them in `.env` to fit your own risk tolerance.
 
 ### Trend-confirmation filter
 
-Both BUY/BUY_CALL rules above have one more condition attached:
-`TREND_SMA_PERIOD` (default 50, in `.env`) — price must also be above this
-longer/slower SMA, not just the 20-SMA, for the signal to fire. This rejects
-crossovers that happen against the broader trend (e.g. brief upward blips
-during a choppy/sideways or downward market). Set `TREND_SMA_PERIOD=0` to
-disable it and go back to a bare 20-SMA crossover.
+Every BUY/BUY_CALL rule above has one more condition attached: price must
+also be above a longer/slower SMA, not just the 20-SMA, for the signal to
+fire. This rejects crossovers that happen against the broader trend (e.g.
+brief upward blips during a choppy/sideways or downward market). Each
+instrument has its own on/off switch and period, since what worked for one
+didn't necessarily work for another:
 
-This was validated with `backtest.py` before being wired in: over the last
-60 days of 15-min candles, adding the filter took BTC from a -1.47%
-compounded return (361 trades, 26.6% win rate) to +2.74% (214 trades, 29.9%
-win rate) with lower drawdown. Nifty's improvement was smaller (-1.29% →
--1.09%) — remember Nifty's backtest trades the index, not the option
-premium, so treat that number as a trigger-quality signal, not a return
-forecast.
+- Nifty and Bitcoin share `TREND_SMA_PERIOD` (default 50, currently **0 =
+  disabled** in `.env` — Bitcoin's edge instead comes from the MACD+Fib
+  filters below).
+- USD/INR has its own `USDINR_TREND_SMA_PERIOD` (default 50, **enabled**) —
+  it needed all three filters together (trend + MACD + Fib) to turn
+  profitable at all; see below.
 
-### Momentum filters (BTC only): MACD + Fibonacci retracement
+This was validated with `backtest.py` before being wired in for Nifty/BTC:
+over the last 60 days of 15-min candles, adding the filter alone took BTC
+from a -1.47% compounded return (361 trades, 26.6% win rate) to +2.74% (214
+trades, 29.9% win rate) with lower drawdown. Nifty's improvement was smaller
+(-1.29% → -1.09%) — remember Nifty's backtest trades the index, not the
+option premium, so treat that number as a trigger-quality signal, not a
+return forecast.
 
-On top of the SMA crossover, a BTC BUY additionally requires:
+### Momentum filters (BTC, USD/INR): MACD + Fibonacci retracement
+
+On top of the SMA crossover, a BTC or USD/INR BUY additionally requires:
 - **MACD histogram positive** — the MACD line is above its signal line
   (12/26/9 EMA), i.e. bullish momentum agrees with the crossover.
 - **Price at/above a Fibonacci retracement level** — computed from the
-  swing high/low over `BTC_FIB_LOOKBACK` candles (default 50); price holding
-  above `BTC_FIB_LEVEL` (default `0.618`) is read as the recent uptrend
-  structure still being intact.
+  swing high/low over the configured lookback (default 50 candles for
+  both); price holding above the configured level (default `0.618` for
+  both) is read as the recent uptrend structure still being intact.
 
-Both are controlled by `BTC_USE_MACD_FILTER` / `BTC_FIB_LOOKBACK` /
-`BTC_FIB_LEVEL` in `.env`. Set `BTC_USE_MACD_FILTER=false` to disable the
-MACD check; the Fibonacci check follows the same on/off switch since they
-were only validated together, not independently.
+Controlled per-instrument via `BTC_USE_MACD_FILTER` / `BTC_FIB_LOOKBACK` /
+`BTC_FIB_LEVEL` and `USDINR_USE_MACD_FILTER` / `USDINR_FIB_LOOKBACK` /
+`USDINR_FIB_LEVEL` in `.env`. Setting either `*_USE_MACD_FILTER=false`
+disables both the MACD and Fibonacci checks for that instrument — they were
+only validated together, not independently.
 
-Validated via `backtest.py --instrument BTC --fib-lookback 50 --fib-level
-0.618 --macd`: over the same 60-day window, this combo produced 100 trades,
-33.0% win rate, +10.26% compounded return, 5.01% max drawdown — versus the
-bare crossover's 372 trades / 26.3% win rate / +1.23% return / 9.95%
-drawdown. Fewer, higher-conviction trades with a much better average
-win/loss ratio. Also checked across both halves of the 60-day window
-independently (not just the full window) to guard against overfitting to
-one stretch of price action — both halves were separately profitable
-(+3.81%/30.0% win rate and +6.81%/36.7% win rate).
+**BTC**, validated via `backtest.py --instrument BTC --fib-lookback 50
+--fib-level 0.618 --macd`: over a 60-day window, this combo produced 100
+trades, 33.0% win rate, +10.26% compounded return, 5.01% max drawdown —
+versus the bare crossover's 372 trades / 26.3% win rate / +1.23% return /
+9.95% drawdown. Fewer, higher-conviction trades with a much better average
+win/loss ratio. Checked across both halves of the window independently too,
+to guard against overfitting to one stretch of price action — both halves
+were separately profitable (+3.81%/30.0% win rate and +6.81%/36.7% win
+rate).
+
+**USD/INR**, validated via `backtest.py --instrument USDINR
+--trend-sma-period 50 --macd --fib-lookback 50 --fib-level 0.618`: needed
+the trend filter *as well* to be profitable at all — the bare crossover lost
+money here (-1.9% over 114 trades), and MACD+Fib alone without the trend
+filter was still marginal. All three together: 21 trades, 42.9% win rate,
++0.59% compounded return, 0.27% max drawdown, positive in both halves of the
+window independently (+0.35%/44.4% and +0.24%/41.7%). **This is a much
+smaller and less certain edge than BTC's** — forex moves are roughly 10x
+smaller than crypto's, so there's far less room for a filter to add value,
+and the sample size (21 trades) is thinner than BTC's (100). Treat it as
+"better than the alternative (a loss)," not as a strong edge.
 
 An RSI overbought filter (`calculate_rsi` in `analyzer.py`, wired into
 `strategy.generate_spot_signal` as `rsi`/`rsi_overbought`) also exists and
-is available via `backtest.py --rsi-period` / `--rsi-overbought`, but is not
-part of the live BTC config — it didn't improve on the MACD+Fib combo in
+is available via `backtest.py --rsi-period` / `--rsi-overbought`, but isn't
+part of any live config — it didn't improve on the above combos in
 backtesting.
 
-Nifty and Bitcoin each track their own position independently (separate
-state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
+Nifty, Bitcoin, and USD/INR each track their own position independently
+(separate state files), so a trade on one doesn't block a signal on either
+of the others.
 
 ## Setup
 
@@ -154,9 +187,10 @@ state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
 
    Edit `.env` and set `DISCORD_WEBHOOK_URL` (Discord: Server Settings →
    Integrations → Webhooks → New Webhook → Copy URL). `ENABLE_NIFTY` /
-   `ENABLE_BTC` toggle each instrument independently. Adjust the other
-   values (risk-free rate, SMA period, expiry window, check interval,
-   target/stop-loss percentages) if needed — the defaults are reasonable.
+   `ENABLE_BTC` / `ENABLE_USDINR` toggle each instrument independently.
+   Adjust the other values (risk-free rate, SMA period, expiry window, check
+   interval, target/stop-loss percentages) if needed — the defaults are
+   reasonable.
 
 3. Run the bot:
 
@@ -165,10 +199,10 @@ state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
    ```
 
    It logs each check to the console and posts a message to Discord whenever
-   a BUY_CALL/BUY or SELL signal fires for either instrument. Position state
-   survives restarts via `state_nifty.json` / `state_btc.json` (created
-   automatically, safe to delete to force a flat position on that
-   instrument).
+   a BUY_CALL/BUY or SELL signal fires for any instrument. Position state
+   survives restarts via `state_nifty.json` / `state_btc.json` /
+   `state_usdinr.json` (created automatically, safe to delete to force a
+   flat position on that instrument).
 
    It also posts a "📡 Status Check" message to Discord every
    `HEARTBEAT_INTERVAL_SECONDS` (default 3600 = 1 hour), separate from real
@@ -196,10 +230,14 @@ reflect the real decision logic rather than a reimplementation that could
 drift from it.
 
 ```bash
-python backtest.py --instrument BOTH          # both instruments, defaults
+python backtest.py --instrument BOTH          # Nifty + BTC, defaults
 python backtest.py --instrument BTC --days 60 --sma-period 20
 python backtest.py --instrument NIFTY --target-pct 0.01 --stop-loss-pct 0.005
+python backtest.py --instrument USDINR --trend-sma-period 50 --macd --fib-lookback 50 --fib-level 0.618
 ```
+
+(`--instrument BOTH` only covers Nifty + BTC for historical reasons; USD/INR
+needs to be selected explicitly.)
 
 It prints number of trades, win rate, average win/loss, compounded return,
 max drawdown, and the last 5 trades.
@@ -232,3 +270,7 @@ only available for the last 60 days; using `--interval` values other than
   This does **not** account for NSE trading holidays (Diwali, Republic Day,
   etc.) — on a holiday it'll still attempt checks and just work off
   whatever stale data comes back. Bitcoin trades 24/7, so its checks always run.
+- USD/INR checks are skipped on Saturday/Sunday, approximating real forex
+  hours (which actually run Sunday ~17:00 ET to Friday ~17:00 ET) as "closed
+  both full weekend days, open otherwise" — same level of simplification as
+  Nifty's holiday-blind check above, not an exact open/close model.

@@ -45,6 +45,19 @@ def is_nse_market_open(now: dt.datetime | None = None) -> bool:
     return NSE_MARKET_OPEN <= now.time() <= NSE_MARKET_CLOSE
 
 
+def is_forex_market_open(now: dt.datetime | None = None) -> bool:
+    """Check whether the forex market (USD/INR included) is open.
+
+    Real forex trading runs continuously from Sunday ~17:00 ET to Friday
+    ~17:00 ET. This approximates that as "closed all day Saturday and
+    Sunday, open otherwise" - same level of simplification already accepted
+    for NSE's holiday calendar (see is_nse_market_open) rather than modeling
+    the exact open/close instants.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    return now.weekday() < 5  # Saturday=5, Sunday=6
+
+
 def _fetch_nifty_data(config: dict) -> tuple:
     history = data_client.get_price_history(config["yfinance_ticker"])
     option_data = data_client.get_option_chain(
@@ -57,6 +70,10 @@ def _fetch_nifty_data(config: dict) -> tuple:
 
 def _fetch_btc_data(config: dict):
     return data_client.get_price_history(config["btc_yfinance_ticker"])
+
+
+def _fetch_usdinr_data(config: dict):
+    return data_client.get_price_history(config["usdinr_yfinance_ticker"])
 
 
 # Each instrument plugs a data-fetch function and its own state file into the
@@ -90,6 +107,21 @@ INSTRUMENTS = [
         "fib_lookback_key": "btc_fib_lookback",
         "fib_level_key": "btc_fib_level",
     },
+    {
+        "key": "USDINR",
+        "mode": "spot",
+        "enabled_config_key": "enable_usdinr",
+        "currency_symbol": "₹",
+        "state_file": os.path.join(_BASE_DIR, "state_usdinr.json"),
+        "fetch": _fetch_usdinr_data,
+        "is_market_open": is_forex_market_open,
+        "profit_target_pct_key": "usdinr_profit_target_pct",
+        "stop_loss_pct_key": "usdinr_stop_loss_pct",
+        "trend_sma_period_key": "usdinr_trend_sma_period",
+        "use_macd_filter_key": "usdinr_use_macd_filter",
+        "fib_lookback_key": "usdinr_fib_lookback",
+        "fib_level_key": "usdinr_fib_level",
+    },
 ]
 
 
@@ -120,8 +152,10 @@ def load_config() -> dict:
         "nse_symbol": _get("NSE_SYMBOL", "NIFTY"),
         "yfinance_ticker": _get("YFINANCE_TICKER", "^NSEI"),
         "btc_yfinance_ticker": _get("BTC_YFINANCE_TICKER", "BTC-USD"),
+        "usdinr_yfinance_ticker": _get("USDINR_YFINANCE_TICKER", "USDINR=X"),
         "enable_nifty": _get_bool("ENABLE_NIFTY", True),
         "enable_btc": _get_bool("ENABLE_BTC", True),
+        "enable_usdinr": _get_bool("ENABLE_USDINR", True),
         "risk_free_rate": float(_get("RISK_FREE_RATE", "0.07")),
         "check_interval_seconds": int(_get("CHECK_INTERVAL_SECONDS", "300")),
         "min_days_to_expiry": int(_get("MIN_DAYS_TO_EXPIRY", "7")),
@@ -140,6 +174,18 @@ def load_config() -> dict:
         "btc_use_macd_filter": _get_bool("BTC_USE_MACD_FILTER", True),
         "btc_fib_lookback": int(_get("BTC_FIB_LOOKBACK", "50")),
         "btc_fib_level": _get("BTC_FIB_LEVEL", "0.618"),
+        # USD/INR: same filter stack as BTC (trend SMA + MACD + Fibonacci),
+        # validated via backtest.py (21 trades over 60 days, 42.9% win rate,
+        # +0.59% compounded return, consistent across both halves of the
+        # window - a much smaller/less certain edge than BTC's, since forex
+        # moves are far smaller than crypto's, but the bare crossover alone
+        # was a loser here).
+        "usdinr_profit_target_pct": float(_get("USDINR_PROFIT_TARGET_PCT", "0.004")),
+        "usdinr_stop_loss_pct": float(_get("USDINR_STOP_LOSS_PCT", "0.002")),
+        "usdinr_trend_sma_period": int(_get("USDINR_TREND_SMA_PERIOD", "50")),
+        "usdinr_use_macd_filter": _get_bool("USDINR_USE_MACD_FILTER", True),
+        "usdinr_fib_lookback": int(_get("USDINR_FIB_LOOKBACK", "50")),
+        "usdinr_fib_level": _get("USDINR_FIB_LEVEL", "0.618"),
     }
 
 
@@ -166,6 +212,7 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
     state = strategy.load_state(instrument["state_file"])
     profit_target_pct = config[instrument["profit_target_pct_key"]]
     stop_loss_pct = config[instrument["stop_loss_pct_key"]]
+    trend_sma_period = config[instrument.get("trend_sma_period_key") or "trend_sma_period"]
 
     if instrument["mode"] == "options":
         history, option_data = instrument["fetch"](config)
@@ -180,7 +227,7 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
             risk_free_rate=config[instrument["risk_free_rate_key"]],
         )
         atm_call = analyzer.find_atm_call(enriched_chain, spot_price=current_price)
-        trend_sma = _trend_sma(closes, config["trend_sma_period"], instrument["key"])
+        trend_sma = _trend_sma(closes, trend_sma_period, instrument["key"])
 
         result = strategy.generate_signal(
             ticker=instrument["key"],
@@ -199,7 +246,7 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
         closes = history["Close"]
         sma = analyzer.calculate_sma(closes, period=config["sma_period"])
         current_price = float(closes.iloc[-1])
-        trend_sma = _trend_sma(closes, config["trend_sma_period"], instrument["key"])
+        trend_sma = _trend_sma(closes, trend_sma_period, instrument["key"])
         profit_target_dollars = config.get(instrument.get("profit_target_dollars_key", ""))
 
         macd_histogram = None
@@ -276,7 +323,7 @@ def main() -> None:
 
     active_instruments = [i for i in INSTRUMENTS if config[i["enabled_config_key"]]]
     if not active_instruments:
-        logger.error("No instruments enabled (check ENABLE_NIFTY / ENABLE_BTC in .env) — nothing to do.")
+        logger.error("No instruments enabled (check ENABLE_NIFTY / ENABLE_BTC / ENABLE_USDINR in .env) — nothing to do.")
         return
 
     if once:
