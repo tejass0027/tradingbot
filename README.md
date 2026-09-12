@@ -102,6 +102,37 @@ win rate) with lower drawdown. Nifty's improvement was smaller (-1.29% →
 premium, so treat that number as a trigger-quality signal, not a return
 forecast.
 
+### Momentum filters (BTC only): MACD + Fibonacci retracement
+
+On top of the SMA crossover, a BTC BUY additionally requires:
+- **MACD histogram positive** — the MACD line is above its signal line
+  (12/26/9 EMA), i.e. bullish momentum agrees with the crossover.
+- **Price at/above a Fibonacci retracement level** — computed from the
+  swing high/low over `BTC_FIB_LOOKBACK` candles (default 50); price holding
+  above `BTC_FIB_LEVEL` (default `0.618`) is read as the recent uptrend
+  structure still being intact.
+
+Both are controlled by `BTC_USE_MACD_FILTER` / `BTC_FIB_LOOKBACK` /
+`BTC_FIB_LEVEL` in `.env`. Set `BTC_USE_MACD_FILTER=false` to disable the
+MACD check; the Fibonacci check follows the same on/off switch since they
+were only validated together, not independently.
+
+Validated via `backtest.py --instrument BTC --fib-lookback 50 --fib-level
+0.618 --macd`: over the same 60-day window, this combo produced 100 trades,
+33.0% win rate, +10.26% compounded return, 5.01% max drawdown — versus the
+bare crossover's 372 trades / 26.3% win rate / +1.23% return / 9.95%
+drawdown. Fewer, higher-conviction trades with a much better average
+win/loss ratio. Also checked across both halves of the 60-day window
+independently (not just the full window) to guard against overfitting to
+one stretch of price action — both halves were separately profitable
+(+3.81%/30.0% win rate and +6.81%/36.7% win rate).
+
+An RSI overbought filter (`calculate_rsi` in `analyzer.py`, wired into
+`strategy.generate_spot_signal` as `rsi`/`rsi_overbought`) also exists and
+is available via `backtest.py --rsi-period` / `--rsi-overbought`, but is not
+part of the live BTC config — it didn't improve on the MACD+Fib combo in
+backtesting.
+
 Nifty and Bitcoin each track their own position independently (separate
 state files), so a Nifty trade doesn't block a Bitcoin signal or vice versa.
 
