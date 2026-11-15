@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Pinned to bookworm: the unpinned 3.12-slim tag moved to a newer Debian
+# release where `playwright install --with-deps` fails on a missing
+# libatomic.so.1 before it can install anything.
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
@@ -13,7 +16,7 @@ ENV PYTHONUNBUFFERED=1
 # xvfb provides a virtual display so Playwright's headed Chromium (required
 # for the Nifty NSE scrape - see data_client.py's module docstring for why
 # headless mode gets blocked) can run on a server with no real display.
-RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
+RUN apt-get update && apt-get install -y --no-install-recommends xvfb libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
