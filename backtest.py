@@ -116,6 +116,13 @@ def _fib_support_series(closes: pd.Series, lookback: int = 50, level: str = "0.5
     return rolling_high - span * _FIB_FRACTIONS[level]
 
 
+def _fib_resistance_series(closes: pd.Series, lookback: int = 50, level: str = "0.5") -> pd.Series:
+    """Mirror of the support level: the same fraction of the swing range, measured up from the low."""
+    rolling_high = closes.rolling(window=lookback).max()
+    rolling_low = closes.rolling(window=lookback).min()
+    return rolling_low + (rolling_high - rolling_low) * _FIB_FRACTIONS[level]
+
+
 def run_backtest(
     closes: pd.Series,
     sma_period: int,
@@ -129,12 +136,17 @@ def run_backtest(
     use_macd: bool = False,
     fib_lookback: int | None = None,
     fib_level: str = "0.5",
+    allow_short: bool = False,
+    short_trend_sma_period: int | None = None,
 ) -> dict:
     """Replay the live spot strategy bar-by-bar over `closes` and return trade stats.
 
     `trend_sma_period`, `rsi_period`, `use_macd`, and `fib_lookback` each
     independently enable the matching optional filter in
     strategy.generate_spot_signal - the same filters the live bot can apply.
+    `allow_short` also takes the mirror-image short trades (with
+    `short_trend_sma_period` as the short side's trend filter), and the
+    result then includes a per-side breakdown under "by_side".
 
     Crossover detection uses generate_spot_signal's persisted
     `state["was_above_sma"]` mechanism, same as live - since this loop visits
@@ -146,6 +158,10 @@ def run_backtest(
     rsi_series = _rsi_series(closes, rsi_period) if rsi_period else None
     macd_series = _macd_histogram_series(closes) if use_macd else None
     fib_series = _fib_support_series(closes, fib_lookback, fib_level) if fib_lookback else None
+    fib_resistance_series = _fib_resistance_series(closes, fib_lookback, fib_level) if fib_lookback and allow_short else None
+    short_trend_series = (
+        closes.rolling(window=short_trend_sma_period).mean() if allow_short and short_trend_sma_period else None
+    )
 
     state = {"in_position": False}
     trades = []
@@ -180,6 +196,16 @@ def run_backtest(
                 continue
             fib_support_level = float(fib_series.iloc[i])
 
+        fib_resistance_level = None
+        if fib_resistance_series is not None:
+            fib_resistance_level = float(fib_resistance_series.iloc[i])
+
+        short_trend_sma = None
+        if short_trend_series is not None:
+            if pd.isna(short_trend_series.iloc[i]):
+                continue
+            short_trend_sma = float(short_trend_series.iloc[i])
+
         current_price = float(closes.iloc[i])
 
         result = strategy.generate_spot_signal(
@@ -195,28 +221,48 @@ def run_backtest(
             rsi_overbought=rsi_overbought,
             macd_histogram=macd_histogram,
             fib_support_level=fib_support_level,
+            allow_short=allow_short,
+            short_trend_sma=short_trend_sma,
+            fib_resistance_level=fib_resistance_level,
         )
         state = result["state"]
         signal = result["signal"]
+        action = signal["action"]
 
-        if signal["action"] == "BUY":
-            open_trade = {"entry_time": closes.index[i], "entry_price": signal["entry_price"]}
-        elif signal["action"] == "SELL" and open_trade is not None:
-            exit_price = signal["exit_price"]
-            pnl_pct = (exit_price - open_trade["entry_price"]) / open_trade["entry_price"]
-            trades.append(
-                {
-                    "entry_time": open_trade["entry_time"],
-                    "exit_time": closes.index[i],
-                    "entry_price": open_trade["entry_price"],
-                    "exit_price": exit_price,
-                    "pnl_pct": pnl_pct,
-                    "reason": signal["reason"],
-                }
-            )
+        if action in ("BUY", "SHORT"):
+            # An entry while a trade is open is a flip: the old side closes
+            # at this bar's price as the new one opens.
+            if open_trade is not None:
+                trades.append(_closed_trade(open_trade, closes.index[i], current_price, "Price crossed SMA (flipped sides)"))
+            open_trade = {
+                "side": "long" if action == "BUY" else "short",
+                "entry_time": closes.index[i],
+                "entry_price": signal["entry_price"],
+            }
+        elif action in ("SELL", "COVER") and open_trade is not None:
+            trades.append(_closed_trade(open_trade, closes.index[i], signal["exit_price"], signal["reason"]))
             open_trade = None
 
-    return _summarize_trades(trades)
+    stats = _summarize_trades(trades)
+    if allow_short:
+        stats["by_side"] = {
+            side: _summarize_trades([t for t in trades if t["side"] == side]) for side in ("long", "short")
+        }
+    return stats
+
+
+def _closed_trade(open_trade: dict, exit_time, exit_price: float, reason: str) -> dict:
+    entry = open_trade["entry_price"]
+    sign = 1 if open_trade["side"] == "long" else -1
+    return {
+        "side": open_trade["side"],
+        "entry_time": open_trade["entry_time"],
+        "exit_time": exit_time,
+        "entry_price": entry,
+        "exit_price": exit_price,
+        "pnl_pct": sign * (exit_price - entry) / entry,
+        "reason": reason,
+    }
 
 
 def _summarize_trades(trades: list) -> dict:
@@ -273,6 +319,15 @@ def print_report(instrument: str, config: dict, stats: dict) -> None:
     print(f"avg win: {stats['avg_win_pct']:.2f}%   avg loss: {stats['avg_loss_pct']:.2f}%")
     print(f"compounded return: {stats['compounded_return_pct']:.2f}%")
     print(f"max drawdown: {stats['max_drawdown_pct']:.2f}%")
+    for side, side_stats in stats.get("by_side", {}).items():
+        if side_stats["num_trades"] == 0:
+            print(f"  {side} only: no trades")
+        else:
+            print(
+                f"  {side} only: {side_stats['num_trades']} trades, "
+                f"{side_stats['win_rate_pct']:.1f}% win rate, "
+                f"{side_stats['compounded_return_pct']:.2f}% compounded"
+            )
     print("\nlast 5 trades:")
     for t in stats["trades"][-5:]:
         print(
@@ -326,6 +381,17 @@ def main() -> None:
         default="0.5",
         help="Which Fibonacci retracement level counts as support (default 0.5)",
     )
+    parser.add_argument(
+        "--shorts",
+        action="store_true",
+        help="Also take the mirror-image short trades (cross below the SMA); reports long/short separately",
+    )
+    parser.add_argument(
+        "--short-trend-sma-period",
+        type=int,
+        default=None,
+        help="With --shorts: only short when price is also below this longer SMA",
+    )
     args = parser.parse_args()
 
     instruments = ["NIFTY", "BTC"] if args.instrument == "BOTH" else [args.instrument]
@@ -370,6 +436,8 @@ def main() -> None:
                 use_macd=args.macd,
                 fib_lookback=args.fib_lookback,
                 fib_level=args.fib_level,
+                allow_short=args.shorts,
+                short_trend_sma_period=args.short_trend_sma_period,
             )
             print_report(instrument, config, stats)
         except Exception as exc:  # noqa: BLE001

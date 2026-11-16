@@ -159,6 +159,32 @@ smaller than crypto's, so there's far less room for a filter to add value,
 and the sample size (21 trades) is thinner than BTC's (100). Treat it as
 "better than the alternative (a loss)," not as a strong edge.
 
+### Short side (BTC only)
+
+With `BTC_ALLOW_SHORT=true` (default) the bot also alerts a **SHORT** — the
+mirror image of a BUY. A cross **below** the 20-SMA opens one when MACD's
+histogram is negative, price is at or below the mirrored Fibonacci level
+(the same fraction of the swing range measured up from the low, instead of
+down from the high), and price is below the `BTC_SHORT_TREND_SMA_PERIOD`
+SMA (default 50). Target sits below entry and the stop-loss above it, using
+the same `BTC_PROFIT_TARGET_DOLLARS` / `BTC_STOP_LOSS_PCT` as longs. A short
+needs futures or margin on an exchange — alerts are signals only.
+
+A position closes internally on target, stop-loss, or the opposite SMA
+cross, and if the other side's filters pass at that same cross it flips
+straight into the new side (the alert you receive is the new entry; exits are
+never alerted).
+
+Backtested with `backtest.py --instrument BTC --shorts
+--short-trend-sma-period 50 --macd --fib-lookback 50 --fib-level 0.618`
+(3%/2% target/stop, no fees or funding costs modeled): on the latest 60 days
+of 15-min candles the shorts alone made +1.71% (52 trades, 36.5% win rate)
+while the longs lost -9.98%, so the two together were -8.44%; over ~700 days
+of hourly candles the shorts made +36.77% (154 trades) and the longs
+-19.55%. BTC mostly fell across that period, so a short side profits from the
+trend itself — it would lose if BTC rallied for months. Shorts tested worse
+on USD/INR, so they are BTC-only.
+
 An RSI overbought filter (`calculate_rsi` in `analyzer.py`, wired into
 `strategy.generate_spot_signal` as `rsi`/`rsi_overbought`) also exists and
 is available via `backtest.py --rsi-period` / `--rsi-overbought`, but isn't
@@ -199,7 +225,7 @@ of the others.
    ```
 
    It logs each check to the console and posts a message to Discord whenever
-   a BUY_CALL/BUY signal fires for any instrument (SELL signals are still
+   a BUY_CALL/BUY/SHORT signal fires for any instrument (exit signals are still
    evaluated internally to close the tracked position, but are not sent as
    alerts - each BUY carries its own target and stop-loss). Position state
    survives restarts via `state_nifty.json` / `state_btc.json` /

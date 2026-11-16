@@ -106,6 +106,8 @@ INSTRUMENTS = [
         "use_macd_filter_key": "btc_use_macd_filter",
         "fib_lookback_key": "btc_fib_lookback",
         "fib_level_key": "btc_fib_level",
+        "allow_short_key": "btc_allow_short",
+        "short_trend_sma_period_key": "btc_short_trend_sma_period",
     },
     {
         "key": "USDINR",
@@ -174,6 +176,11 @@ def load_config() -> dict:
         "btc_use_macd_filter": _get_bool("BTC_USE_MACD_FILTER", True),
         "btc_fib_lookback": int(_get("BTC_FIB_LOOKBACK", "50")),
         "btc_fib_level": _get("BTC_FIB_LEVEL", "0.618"),
+        # BTC shorts: the mirror-image trade (cross below the SMA). Its trend
+        # filter has its own period because the long side's is disabled -
+        # the short combo was validated with trend + MACD + Fib together.
+        "btc_allow_short": _get_bool("BTC_ALLOW_SHORT", True),
+        "btc_short_trend_sma_period": int(_get("BTC_SHORT_TREND_SMA_PERIOD", "50")),
         # USD/INR: same filter stack as BTC (trend SMA + MACD + Fibonacci),
         # validated via backtest.py (21 trades over 60 days, 42.9% win rate,
         # +0.59% compounded return, consistent across both halves of the
@@ -256,12 +263,22 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
             except ValueError as exc:
                 logger.warning("[%s] MACD filter disabled this cycle: %s", instrument["key"], exc)
 
+        allow_short = bool(config.get(instrument.get("allow_short_key", "")))
+        short_trend_sma = None
+        if allow_short:
+            short_trend_sma = _trend_sma(closes, config[instrument["short_trend_sma_period_key"]], instrument["key"])
+
         fib_support_level = None
+        fib_resistance_level = None
         fib_lookback_key = instrument.get("fib_lookback_key", "")
         if fib_lookback_key and config.get(fib_lookback_key):
             try:
                 fib_levels = analyzer.calculate_fibonacci_levels(closes, lookback=config[fib_lookback_key])
                 fib_support_level = fib_levels[config[instrument["fib_level_key"]]]
+                # Mirror of the support level: the same fraction of the swing
+                # range measured up from the low instead of down from the high.
+                swing_low, swing_high = fib_levels["swing_low"], fib_levels["swing_high"]
+                fib_resistance_level = swing_low + (swing_high - swing_low) * float(config[instrument["fib_level_key"]])
             except ValueError as exc:
                 logger.warning("[%s] Fibonacci filter disabled this cycle: %s", instrument["key"], exc)
 
@@ -277,6 +294,9 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
             profit_target_dollars=profit_target_dollars,
             macd_histogram=macd_histogram,
             fib_support_level=fib_support_level,
+            allow_short=allow_short,
+            short_trend_sma=short_trend_sma,
+            fib_resistance_level=fib_resistance_level,
         )
 
     strategy.save_state(result["state"], instrument["state_file"])
@@ -287,7 +307,7 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
     # SELL signals still close the tracked position (so the next BUY can fire)
     # but are deliberately not announced - alerts are entries only, each
     # carrying its own target and stop-loss.
-    if signal["action"] in ("BUY_CALL", "BUY"):
+    if signal["action"] in ("BUY_CALL", "BUY", "SHORT"):
         sent = alerter.send_discord_alert(signal, config["discord_webhook_url"])
         if sent:
             logger.info("[%s] Alert sent to Discord", instrument["key"])

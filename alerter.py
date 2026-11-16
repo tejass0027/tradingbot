@@ -34,6 +34,16 @@ def format_signal_message(signal: dict) -> str:
             f"_{signal['reason']}_"
         )
 
+    if action == "SHORT":
+        return (
+            f"### \U0001F53B SHORT — {signal['ticker']}\n"
+            f"**Entry Price:** {cur}{signal['entry_price']:.2f}\n"
+            f"**\U0001F3AF Target (take-profit):** {cur}{signal['target_price']:.2f}\n"
+            f"**\U0001F6D1 Stop Loss:** {cur}{signal['stop_loss_price']:.2f}\n"
+            f"**SMA:** {cur}{signal['sma']:.2f}\n"
+            f"_{signal['reason']}_"
+        )
+
     if action == "SELL" and "strike" in signal:
         exit_price = signal.get("exit_price")
         exit_str = f"{cur}{exit_price:.2f}" if exit_price is not None else "N/A"

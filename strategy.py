@@ -179,8 +179,21 @@ def generate_spot_signal(
     rsi_overbought: float = 70.0,
     macd_histogram: float | None = None,
     fib_support_level: float | None = None,
+    allow_short: bool = False,
+    short_trend_sma: float | None = None,
+    fib_resistance_level: float | None = None,
 ) -> dict:
     """Evaluate the strategy rules for plain spot trading (no options chain).
+
+    With `allow_short=True` the mirror-image trade is also taken: a cross
+    below the SMA opens a SHORT (target below entry, stop-loss above) when
+    the mirrored filters agree - price below `short_trend_sma`, RSI above
+    100 - `rsi_overbought`, MACD histogram negative, and price at or below
+    `fib_resistance_level`. A position always closes on the opposite SMA
+    cross, and if the other side's filters pass at that same cross the
+    position flips straight into the new side (the signal returned is the
+    new entry, not the exit) - otherwise the cross that closes a trade would
+    be consumed and the opposite entry could never fire.
 
     Rules:
       - BUY: not currently in a position, and price crosses above the SMA.
@@ -220,77 +233,117 @@ def generate_spot_signal(
     crossed_above = was_above_sma is False and is_above_sma
     crossed_below = was_above_sma is True and not is_above_sma
 
-    trend_ok = trend_sma is None or current_price > trend_sma
-    rsi_ok = rsi is None or rsi < rsi_overbought
-    macd_ok = macd_histogram is None or macd_histogram > 0
-    fib_ok = fib_support_level is None or current_price >= fib_support_level
-    filters_ok = trend_ok and rsi_ok and macd_ok and fib_ok
+    long_checks = {
+        "trend": trend_sma is None or current_price > trend_sma,
+        "RSI overbought": rsi is None or rsi < rsi_overbought,
+        "MACD bearish": macd_histogram is None or macd_histogram > 0,
+        "below Fib support": fib_support_level is None or current_price >= fib_support_level,
+    }
+    short_checks = {
+        "trend": short_trend_sma is None or current_price < short_trend_sma,
+        "RSI oversold": rsi is None or rsi > 100.0 - rsi_overbought,
+        "MACD bullish": macd_histogram is None or macd_histogram < 0,
+        "above Fib resistance": fib_resistance_level is None or current_price <= fib_resistance_level,
+    }
+    long_ok = all(long_checks.values())
+    short_ok = allow_short and all(short_checks.values())
 
+    entry_args = (ticker, current_price, sma, currency_symbol, profit_target_pct, stop_loss_pct, profit_target_dollars)
     signal = {"action": "HOLD", "ticker": ticker, "reason": "No trigger condition met"}
 
     if not state.get("in_position"):
-        if crossed_above and filters_ok:
-            entry_price = current_price
-            if profit_target_dollars is not None:
-                target_price = round(entry_price + profit_target_dollars, 2)
-            else:
-                target_price = round(entry_price * (1 + profit_target_pct), 2)
-            stop_loss_price = round(entry_price * (1 - stop_loss_pct), 2)
-            signal = {
-                "action": "BUY",
-                "ticker": ticker,
-                "currency_symbol": currency_symbol,
-                "entry_price": entry_price,
-                "target_price": target_price,
-                "stop_loss_price": stop_loss_price,
-                "sma": sma,
-                "reason": "Price crossed above SMA",
-            }
-            state = {
-                "in_position": True,
-                "entry_price": entry_price,
-                "target_price": target_price,
-                "stop_loss_price": stop_loss_price,
-                "entry_time": dt.datetime.now().isoformat(),
-            }
-        elif crossed_above and not filters_ok:
-            failed = []
-            if not trend_ok:
-                failed.append("trend")
-            if not rsi_ok:
-                failed.append("RSI overbought")
-            if not macd_ok:
-                failed.append("MACD bearish")
-            if not fib_ok:
-                failed.append("below Fib support")
+        if crossed_above and long_ok:
+            signal, state = _spot_entry("long", *entry_args)
+        elif crossed_below and short_ok:
+            signal, state = _spot_entry("short", *entry_args)
+        elif crossed_above:
+            failed = [name for name, ok in long_checks.items() if not ok]
             signal["reason"] = f"Price crossed above SMA but rejected by filter(s): {', '.join(failed)}"
+        elif crossed_below and allow_short:
+            failed = [name for name, ok in short_checks.items() if not ok]
+            signal["reason"] = f"Price crossed below SMA but rejected by short filter(s): {', '.join(failed)}"
     else:
+        side = state.get("side", "long")
         entry_price = state.get("entry_price")
         target_price = state.get("target_price")
         stop_loss_price = state.get("stop_loss_price")
-        hit_profit_target = target_price is not None and current_price >= target_price
-        hit_stop_loss = stop_loss_price is not None and current_price <= stop_loss_price
+        if side == "long":
+            hit_profit_target = target_price is not None and current_price >= target_price
+            hit_stop_loss = stop_loss_price is not None and current_price <= stop_loss_price
+            sma_reversed = crossed_below
+            flip_ok = short_ok
+        else:
+            hit_profit_target = target_price is not None and current_price <= target_price
+            hit_stop_loss = stop_loss_price is not None and current_price >= stop_loss_price
+            sma_reversed = crossed_above
+            flip_ok = long_ok
 
-        if hit_profit_target or hit_stop_loss or crossed_below:
-            if hit_profit_target:
-                reason = "Price reached profit target"
-            elif hit_stop_loss:
-                reason = "Price hit stop-loss"
+        if hit_profit_target or hit_stop_loss or sma_reversed:
+            if sma_reversed and flip_ok:
+                signal, state = _spot_entry("short" if side == "long" else "long", *entry_args)
             else:
-                reason = "Price crossed below SMA"
-            signal = {
-                "action": "SELL",
-                "ticker": ticker,
-                "currency_symbol": currency_symbol,
-                "entry_price": entry_price,
-                "target_price": target_price,
-                "stop_loss_price": stop_loss_price,
-                "exit_price": current_price,
-                "sma": sma,
-                "reason": reason,
-            }
-            state = dict(_FLAT_STATE)
+                if hit_profit_target:
+                    reason = "Price reached profit target"
+                elif hit_stop_loss:
+                    reason = "Price hit stop-loss"
+                else:
+                    reason = "Price crossed below SMA" if side == "long" else "Price crossed above SMA"
+                signal = {
+                    "action": "SELL" if side == "long" else "COVER",
+                    "ticker": ticker,
+                    "currency_symbol": currency_symbol,
+                    "entry_price": entry_price,
+                    "target_price": target_price,
+                    "stop_loss_price": stop_loss_price,
+                    "exit_price": current_price,
+                    "sma": sma,
+                    "reason": reason,
+                }
+                state = dict(_FLAT_STATE)
 
     state = dict(state)
     state["was_above_sma"] = is_above_sma
     return {"signal": signal, "state": state}
+
+
+def _spot_entry(
+    side: str,
+    ticker: str,
+    price: float,
+    sma: float,
+    currency_symbol: str,
+    profit_target_pct: float,
+    stop_loss_pct: float,
+    profit_target_dollars: float | None,
+) -> tuple[dict, dict]:
+    """Build the entry signal and the position state for a new spot trade.
+
+    A long targets above entry with its stop below; a short is the mirror
+    image (target below entry, stop above).
+    """
+    direction = 1 if side == "long" else -1
+    if profit_target_dollars is not None:
+        target_price = round(price + direction * profit_target_dollars, 2)
+    else:
+        target_price = round(price * (1 + direction * profit_target_pct), 2)
+    stop_loss_price = round(price * (1 - direction * stop_loss_pct), 2)
+
+    signal = {
+        "action": "BUY" if side == "long" else "SHORT",
+        "ticker": ticker,
+        "currency_symbol": currency_symbol,
+        "entry_price": price,
+        "target_price": target_price,
+        "stop_loss_price": stop_loss_price,
+        "sma": sma,
+        "reason": "Price crossed above SMA" if side == "long" else "Price crossed below SMA",
+    }
+    state = {
+        "in_position": True,
+        "side": side,
+        "entry_price": price,
+        "target_price": target_price,
+        "stop_loss_price": stop_loss_price,
+        "entry_time": dt.datetime.now().isoformat(),
+    }
+    return signal, state
