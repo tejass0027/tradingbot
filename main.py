@@ -284,7 +284,10 @@ def run_check(config: dict, instrument: dict) -> tuple[str, str]:
     signal = result["signal"]
     logger.info("[%s] Signal: %s (%s)", instrument["key"], signal["action"], signal.get("reason"))
 
-    if signal["action"] in ("BUY_CALL", "BUY", "SELL"):
+    # SELL signals still close the tracked position (so the next BUY can fire)
+    # but are deliberately not announced - alerts are entries only, each
+    # carrying its own target and stop-loss.
+    if signal["action"] in ("BUY_CALL", "BUY"):
         sent = alerter.send_discord_alert(signal, config["discord_webhook_url"])
         if sent:
             logger.info("[%s] Alert sent to Discord", instrument["key"])

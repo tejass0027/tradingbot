@@ -199,7 +199,9 @@ of the others.
    ```
 
    It logs each check to the console and posts a message to Discord whenever
-   a BUY_CALL/BUY or SELL signal fires for any instrument. Position state
+   a BUY_CALL/BUY signal fires for any instrument (SELL signals are still
+   evaluated internally to close the tracked position, but are not sent as
+   alerts - each BUY carries its own target and stop-loss). Position state
    survives restarts via `state_nifty.json` / `state_btc.json` /
    `state_usdinr.json` (created automatically, safe to delete to force a
    flat position on that instrument).
